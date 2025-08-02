@@ -1,0 +1,2 @@
+# tokumei-bot
+Webhookを使ったDiscordに匿名チャットを実装するためのBot
