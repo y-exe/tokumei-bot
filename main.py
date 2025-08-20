@@ -334,24 +334,26 @@ class PunishConfirmModal(discord.ui.Modal, title='<:11:1407591910767464459> 処�
         required=True
     )
 
-    def __init__(self, user_id: str, content: str):
+    def __init__(self, user_id: str, content: str, original_report_message: discord.Message):
         super().__init__()
         self.user_id = user_id
         self.content = content
+        self.original_report_message = original_report_message 
 
     async def on_submit(self, interaction: discord.Interaction):
         if self.confirm_text.value.lower() != "はい":
             await interaction.response.send_message("キャンセルしました。", ephemeral=True)
             return
-        view = PunishConfirmView(self.user_id, self.content)
+        view = PunishConfirmView(self.user_id, self.content, self.original_report_message)
         await interaction.response.send_message("最終確認：本当に処罰しますか？", view=view, ephemeral=True)
 
 
 class PunishConfirmView(discord.ui.View):
-    def __init__(self, user_id: str, content: str):
+    def __init__(self, user_id: str, content: str, original_report_message: discord.Message):
         super().__init__(timeout=300)
         self.user_id = user_id
         self.content = content
+        self.original_report_message = original_report_message
 
     @discord.ui.button(label="はい", style=discord.ButtonStyle.danger)
     async def confirm_punish(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -372,9 +374,13 @@ class PunishConfirmView(discord.ui.View):
         except Exception as e:
             print(f"DM送信エラー: {e}")
 
-        embed = interaction.message.embeds[0]
-        embed.description = (embed.description or "") + "\n**終了済み**"
-        await interaction.message.edit(embed=embed, view=None)
+        if self.original_report_message.embeds:
+            embed = self.original_report_message.embeds[0]
+            embed.description = (embed.description or "") + "\n**終了済み**"
+            await self.original_report_message.edit(embed=embed, view=None)
+        else:
+            print(f"エラー: 元の通報メッセージ (ID: {self.original_report_message.id}) にEmbedが見つかりませんでした。")
+
 
         await interaction.response.send_message("処罰を実行しました。", ephemeral=True)
         self.stop()
@@ -393,7 +399,7 @@ class ReportView(discord.ui.View):
 
     @discord.ui.button(label="処罰", style=discord.ButtonStyle.danger, custom_id="punish_button")
     async def punish_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(PunishConfirmModal(self.user_id, self.content))
+        await interaction.response.send_modal(PunishConfirmModal(self.user_id, self.content, interaction.message))
 
     @discord.ui.button(label="処罰なし", style=discord.ButtonStyle.primary, custom_id="no_punish_button")
     async def no_punish_button(self, interaction: discord.Interaction, button: discord.ui.Button):
