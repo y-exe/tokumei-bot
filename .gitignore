@@ -1,0 +1,36 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+venv/
+.venv/
+env/
+.env/
+ENV/
+.ENV/
+
+.env
+
+# Application-specific files
+# JSONデータファイル（実行中に生成・更新されるもの）
+channels.json
+user_data.json
+thresholds.json
+domains.json
+keywords.json
+banned_users.json
+guild_settings.json
+logs/archive.json
+
+logs/
+*.log
+
+.vscode/
+.idea/
+
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.webp
+*.mp4
