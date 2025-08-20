@@ -11,8 +11,6 @@ ENV/
 
 .env
 
-# Application-specific files
-# JSONデータファイル（実行中に生成・更新されるもの）
 channels.json
 user_data.json
 thresholds.json
