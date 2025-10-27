@@ -22,14 +22,15 @@ DOMAINS_FILE = 'domains.json'
 KEYWORDS_FILE = 'keywords.json'
 BANNED_USERS_FILE = 'banned_users.json'
 GUILD_SETTINGS_FILE = 'guild_settings.json'
-
-WEBHOOK_POOL_SIZE = 4
+ANONYMOUS_DATA_FILE = 'anonymous_data.json'
+MESSAGE_LOGS_FILE = 'message_logs.json'
 
 SIGHTENGINE_USER = os.getenv("SIGHTENGINE_USER")
 SIGHTENGINE_SECRET = os.getenv("SIGHTENGINE_SECRET")
 
 ALLOWED_ROLE_ID = 1368911481063866449
-ALLOWED_USER_IDS = [703734573108035715, 1102557945889300480]
+ALLOWED_USER_IDS = [1415294294012465162, 1415293169657974844]
+CONTINUOUS_POST_THRESHOLD_MINUTES = 20
 
 DEFAULT_THRESHOLDS = {"nsfw": 0.50, "guro": 0.50, "report": 3}
 DEFAULT_DOMAINS = ["pornhub.com", "xvideos.com", "dlsite.com"]
@@ -46,13 +47,14 @@ DEFAULT_KEYWORDS = [
     "RMT", "垢販売", "アカウント売買", "儲かる", "稼げる", "副業"
 ]
 AVATAR_URLS = [
-    "https://i.gyazo.com/f91fc95f6ff8d25c39b188a5a0cbb121.png",
-    "https://i.gyazo.com/20ff74aca45b8965a997895a60a579cd.png",
-    "https://i.gyazo.com/cc2c921d977f1486f5fe899627020c54.png",
-    "https://i.gyazo.com/c54986b000f7374bb077839e6c9fecb9.png",
+    "https://cdn.discordapp.com/embed/avatars/0.png",
+    "https://cdn.discordapp.com/embed/avatars/1.png",
+    "https://cdn.discordapp.com/embed/avatars/2.png",
+    "https://cdn.discordapp.com/embed/avatars/3.png",
+    "https://cdn.discordapp.com/embed/avatars/4.png",
+    "https://cdn.discordapp.com/embed/avatars/5.png"
 ]
 VIDEO_EXTENSIONS = ['mp4', 'mov', 'webm', 'avi', 'mkv', 'flv', 'gif']
-CLEANUP_SECONDS = 60
 
 def load_json(filename, default_data):
     if not os.path.exists(filename):
@@ -101,7 +103,6 @@ intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
 intents.guilds = True
-
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 sightengine_client = None
@@ -109,30 +110,10 @@ if SIGHTENGINE_USER and SIGHTENGINE_SECRET:
     sightengine_client = SightengineClient(SIGHTENGINE_USER, SIGHTENGINE_SECRET)
 
 anonymous_channels_data = load_json(CHANNELS_FILE, {})
-user_post_data = load_json(USER_DATA_FILE, {})
 banned_users = load_json(BANNED_USERS_FILE, {})
 guild_settings = load_json(GUILD_SETTINGS_FILE, {})
-cleanup_tasks = {}
 button_update_locks = {}
 report_data = {}
-
-async def schedule_user_data_cleanup(user_id: str):
-    global cleanup_tasks
-    if user_id in cleanup_tasks and not cleanup_tasks[user_id].done():
-        cleanup_tasks[user_id].cancel()
-    task = bot.loop.create_task(delete_user_data_after_delay(user_id))
-    cleanup_tasks[user_id] = task
-
-async def delete_user_data_after_delay(user_id: str):
-    global cleanup_tasks
-    await asyncio.sleep(CLEANUP_SECONDS)
-    current_user_data = load_json(USER_DATA_FILE, {})
-    if user_id in current_user_data:
-        del current_user_data[user_id]
-        save_json(USER_DATA_FILE, current_user_data)
-        print(f"User {user_id} のデータを非アクティブのため削除しました。")
-    if user_id in cleanup_tasks:
-        del cleanup_tasks[user_id]
 
 def is_authorized(interaction: discord.Interaction) -> bool:
     user_roles = getattr(interaction.user, 'roles', [])
@@ -142,32 +123,115 @@ def is_authorized(interaction: discord.Interaction) -> bool:
         return True
     return False
 
+async def send_anonymous_message(interaction: discord.Interaction, content: str):
+    channel_id = str(interaction.channel.id)
+    channel_data = anonymous_channels_data.get(channel_id)
+    if not channel_data or not channel_data.get("webhook_url"):
+        print(f"エラー: チャンネル {channel_id} のWebhook設定が見つかりません。")
+        return False
+
+    user_id = str(interaction.user.id)
+    current_time = datetime.now(timezone.utc)
+    
+    user_post_data = load_json(USER_DATA_FILE, {})
+    anonymous_data = load_json(ANONYMOUS_DATA_FILE, {})
+    channel_anon_data = anonymous_data.setdefault(channel_id, {"counter": 0, "last_icon": None, "last_user_id": None})
+
+    if channel_anon_data["counter"] >= 1000:
+        channel_anon_data["counter"] = 0
+        embed = discord.Embed(
+            title="匿名IDがリセットされました。",
+            description="IDは001からになります。",
+            color=discord.Color.blue()
+        )
+        await interaction.channel.send(embed=embed)
+        for uid, data in user_post_data.items():
+            if channel_id in data:
+                del user_post_data[uid][channel_id]
+        save_json(USER_DATA_FILE, user_post_data)
+
+    anonymous_id = None
+    avatar_url = None
+    should_inherit = False
+
+    last_poster = channel_anon_data.get("last_user_id")
+    if user_id in user_post_data and channel_id in user_post_data[user_id] and last_poster == user_id:
+        user_channel_data = user_post_data[user_id][channel_id]
+        last_post_time = datetime.fromisoformat(user_channel_data["timestamp"])
+        if current_time - last_post_time < timedelta(minutes=CONTINUOUS_POST_THRESHOLD_MINUTES):
+            should_inherit = True
+            anonymous_id = user_channel_data.get("anonymous_id")
+            avatar_url = user_channel_data.get("avatar_url")
+    
+    if not should_inherit:
+        channel_anon_data["counter"] += 1
+        anonymous_id = channel_anon_data["counter"]
+        
+        last_icon = channel_anon_data.get("last_icon")
+        available_avatars = [url for url in AVATAR_URLS if url != last_icon]
+        if not available_avatars:
+            available_avatars = AVATAR_URLS
+        avatar_url = random.choice(available_avatars)
+        channel_anon_data["last_icon"] = avatar_url
+
+    try:
+        webhook_url = channel_data["webhook_url"]
+        webhook = discord.Webhook.from_url(webhook_url, session=bot.http._HTTPClient__session)
+        
+        sent_message = await webhook.send(
+            content=content,
+            username=f"匿名 {anonymous_id:03d}",
+            avatar_url=avatar_url,
+            allowed_mentions=discord.AllowedMentions.none(),
+            wait=True
+        )
+
+        if channel_data.get("logging_enabled", True):
+            log_file = get_log_file_path(current_time)
+            message_log = load_json(log_file, {})
+            message_log[str(sent_message.id)] = {
+                "user_id": user_id, "timestamp": current_time.isoformat(), "content": content
+            }
+            save_json(log_file, message_log)
+        
+        message_logs = load_json(MESSAGE_LOGS_FILE, {})
+        message_logs[str(sent_message.id)] = {
+            "anonymous_id": anonymous_id, "user_id": user_id
+        }
+        save_json(MESSAGE_LOGS_FILE, message_logs)
+
+        user_post_data.setdefault(user_id, {})[channel_id] = {
+            "timestamp": current_time.isoformat(), "anonymous_id": anonymous_id, "avatar_url": avatar_url
+        }
+        
+        channel_anon_data["last_user_id"] = user_id
+        
+        save_json(USER_DATA_FILE, user_post_data)
+        save_json(ANONYMOUS_DATA_FILE, anonymous_data)
+        
+        await update_button_message(interaction.channel, channel_id)
+        return True
+
+    except Exception as e:
+        print(f"メッセージ送信中にエラー: {e}")
+        return False
+
 class AnonymousPostModal(discord.ui.Modal, title='匿名メッセージを送信'):
     message_content = discord.ui.TextInput(
-        label='メッセージ内容',
-        style=discord.TextStyle.paragraph,
-        placeholder='ここに送信したいメッセージを入力してください...',
-        required=True,
-        max_length=2000
+        label='メッセージ内容', style=discord.TextStyle.paragraph,
+        placeholder='ここに送信したいメッセージを入力してください...', required=True, max_length=2000
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        global anonymous_channels_data, user_post_data, banned_users
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer(ephemeral=True, thinking=False)
 
         if str(interaction.user.id) in banned_users:
-            embed = discord.Embed(
-                title="投稿エラー",
-                description="ルール違反のため、匿名チャットの利用が制限されています。",
-                color=discord.Color.red()
-            )
+            embed = discord.Embed(title="投稿エラー", description="ルール違反のため、匿名チャットの利用が制限されています。", color=discord.Color.red())
             await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
         thresholds = load_json(THRESHOLDS_FILE, DEFAULT_THRESHOLDS)
-        blocked_domains = load_json(DOMAINS_FILE, DEFAULT_DOMAINS)
         blocked_keywords = load_json(KEYWORDS_FILE, DEFAULT_KEYWORDS)
-
         for keyword in blocked_keywords:
             if keyword.lower() in self.message_content.value.lower():
                 embed = discord.Embed(title="キーワードブロック", color=discord.Color.red())
@@ -177,140 +241,37 @@ class AnonymousPostModal(discord.ui.Modal, title='匿名メッセージを送信
                 await interaction.followup.send(embed=embed, ephemeral=True)
                 return
 
-        urls = re.findall(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', self.message_content.value)
-        if urls and sightengine_client:
-            for url in urls:
-                clean_url = url.split('?')[0]
-                is_direct_image = clean_url.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp'))
-                is_video = any(ext in clean_url.lower() for ext in VIDEO_EXTENSIONS)
-
-                if is_video:
-                    embed = discord.Embed(title="投稿ブロック", description="動画ファイルへのリンクは禁止されています。", color=discord.Color.red())
-                    await interaction.followup.send(embed=embed, ephemeral=True)
-                    return
-                if any(domain in clean_url.lower() for domain in blocked_domains):
-                    embed = discord.Embed(title="投稿ブロック", description="禁止されたサイトへのリンクが含まれています。", color=discord.Color.red())
-                    await interaction.followup.send(embed=embed, ephemeral=True)
-                    return
-
-                image_to_check_path = None
-                try:
-                    if is_direct_image:
-                        async with aiohttp.ClientSession() as session:
-                            async with session.get(url, allow_redirects=True, timeout=10) as get_resp:
-                                if get_resp.status != 200: continue
-                                image_bytes = await get_resp.read()
-                        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as temp_file:
-                            temp_file.write(image_bytes)
-                            image_to_check_path = temp_file.name
-                    else:
-                        async with async_playwright() as p:
-                            browser = await p.chromium.launch()
-                            page = await browser.new_page()
-                            await page.goto(url, wait_until='networkidle', timeout=15000)
-                            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as temp_file:
-                                await page.screenshot(path=temp_file.name, type='jpeg', quality=80)
-                                image_to_check_path = temp_file.name
-                            await browser.close()
-
-                    if not image_to_check_path: continue
-
-                    result = await bot.loop.run_in_executor(
-                        None,
-                        lambda: sightengine_client.check('nudity', 'gore').set_file(image_to_check_path)
-                    )
-
-                    if result['status'] == 'failure':
-                        print(f"Sightengine APIエラー: {result['error']['message']}")
-                        continue
-
-                    nsfw_score = result.get('nudity', {}).get('raw')
-                    if nsfw_score is not None and nsfw_score > thresholds.get("nsfw", 0.50):
-                        embed = discord.Embed(title="NSFWコンテンツを検出", description="画像がNSFWコンテンツの可能性が高いと判定されたため、メッセージを送信できませんでした。", color=discord.Color.red())
-                        embed.add_field(name="NSFWスコア", value=f"`{nsfw_score:.2%}`")
-                        await interaction.followup.send(embed=embed, ephemeral=True)
-                        return
-
-                    guro_score = result.get('gore', {}).get('prob')
-                    if guro_score is not None and guro_score > thresholds.get("guro", 0.50):
-                        embed = discord.Embed(title="グロコンテンツを検出", description="画像がグロコンテンツの可能性が高いと判定されたため、メッセージを送信できませんでした。", color=discord.Color.red())
-                        embed.add_field(name="グロスコア", value=f"`{guro_score:.2%}`")
-                        await interaction.followup.send(embed=embed, ephemeral=True)
-                        return
-                except Exception as e:
-                    print(f"URL解析処理中にエラーが発生しました: {e}")
-                finally:
-                    if image_to_check_path and os.path.exists(image_to_check_path):
-                        os.remove(image_to_check_path)
-
         mention_pattern = r"<@!?&?[0-9]{17,20}>|@everyone|@here"
         if re.search(mention_pattern, self.message_content.value):
             await interaction.followup.send('エラー: メンションを含むメッセージは送信できません。', ephemeral=True)
             return
 
-        channel_id = str(interaction.channel.id)
-        channel_data = anonymous_channels_data.get(channel_id)
+        if not await send_anonymous_message(interaction, self.message_content.value):
+            await interaction.followup.send('メッセージの送信中にエラーが発生しました。', ephemeral=True)
 
-        if not channel_data or not channel_data.get("webhook_urls"):
-            await interaction.followup.send('エラー: このチャンネルは匿名投稿用に正しく設定されていません。', ephemeral=True)
-            return
+class ReplyModal(discord.ui.Modal, title="メッセージに返信"):
+    message_content = discord.ui.TextInput(
+        label="返信内容", style=discord.TextStyle.paragraph,
+        placeholder="返信メッセージを入力してください...", required=True, max_length=1900
+    )
 
-        user_id = str(interaction.user.id)
-        current_time = datetime.now(timezone.utc)
+    def __init__(self, target_message: discord.Message, target_anonymous_id: str):
+        super().__init__()
+        self.target_message = target_message
+        self.target_anonymous_id = target_anonymous_id
 
-        user_post_data = load_json(USER_DATA_FILE, {})
-        chosen_webhook_url = None
-
-        if user_id in user_post_data:
-            last_post_time = datetime.fromisoformat(user_post_data[user_id]["timestamp"])
-            if current_time - last_post_time < timedelta(seconds=CLEANUP_SECONDS):
-                if user_post_data[user_id]["webhook_url"] in channel_data["webhook_urls"]:
-                    chosen_webhook_url = user_post_data[user_id]["webhook_url"]
-        if not chosen_webhook_url:
-            all_webhooks = channel_data["webhook_urls"]
-            last_used_webhook = channel_data.get("last_webhook_url_used")
-            available_webhooks = [url for url in all_webhooks if url != last_used_webhook]
-            if not available_webhooks:
-                available_webhooks = all_webhooks
-            chosen_webhook_url = random.choice(available_webhooks)
-
-        try:
-            webhook = discord.Webhook.from_url(chosen_webhook_url, session=bot.http._HTTPClient__session)
-            sent_message = await webhook.send(
-                content=self.message_content.value,
-                username="匿名",
-                allowed_mentions=discord.AllowedMentions.none(),
-                wait=True
-            )
-            if anonymous_channels_data.get(channel_id, {}).get("logging_enabled", True):
-                log_file = get_log_file_path(current_time)
-                os.makedirs(os.path.dirname(log_file), exist_ok=True)
-                message_log = load_json(log_file, {})
-                message_log[str(sent_message.id)] = {
-                    "user_id": str(interaction.user.id),
-                    "webhook_url": chosen_webhook_url,
-                    "timestamp": current_time.isoformat(),
-                    "content": self.message_content.value
-                }
-                save_json(log_file, message_log)
-            user_post_data[user_id] = {
-                "webhook_url": chosen_webhook_url,
-                "timestamp": current_time.isoformat()
-            }
-            save_json(USER_DATA_FILE, user_post_data)
-            anonymous_channels_data[channel_id]["last_webhook_url_used"] = chosen_webhook_url
-            save_json(CHANNELS_FILE, anonymous_channels_data)
-            await schedule_user_data_cleanup(user_id)
-            await update_button_message(interaction.channel, channel_id)
-        except Exception as e:
-            await interaction.followup.send(f'予期せぬエラーが発生しました: {e}', ephemeral=True)
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=False)
+        
+        reply_prefix = f"[>>{self.target_anonymous_id}]({self.target_message.jump_url})\n"
+        full_content = reply_prefix + self.message_content.value
+        
+        if not await send_anonymous_message(interaction, full_content):
+            await interaction.followup.send('返信の送信中にエラーが発生しました。', ephemeral=True)
 
 class EditMessageModal(discord.ui.Modal, title='メッセージを編集'):
     message_content = discord.ui.TextInput(
-        label='メッセージ内容',
-        style=discord.TextStyle.paragraph,
-        required=True,
-        max_length=2000
+        label='メッセージ内容', style=discord.TextStyle.paragraph, required=True, max_length=2000
     )
 
     def __init__(self, webhook_url: str, message_id: int):
@@ -464,9 +425,9 @@ class HelpView(discord.ui.View):
     async def help_3(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(title="<:9_:1407591872234520576> メッセージ通報について", color=discord.Color.blue())
         embed.description = (
-            "**<:10:1407591891318472794> メッセージをPCの場合は右クリック、スマホなどの場合は長押しをして\n"
-            "アプリからメッセージ通報を押すことで\n"
-            "メッセージの通報が可能です。**"
+            "**<:10:1407591891318472794> メッセージ右クリ or 長押し>アプリ から\n"
+            "「メッセージ通報」を押す**ことで\n"
+            "メッセージの通報が可能です。"
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -474,9 +435,9 @@ class HelpView(discord.ui.View):
     async def help_4(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = discord.Embed(title="<:9_:1407591872234520576> メッセージ削除・編集について", color=discord.Color.blue())
         embed.description = (
-            "**<:10:1407591891318472794> メッセージをPCの場合は右クリック、スマホなどの場合は長押しをして\n"
-            "アプリからメッセージ削除・またはメッセージを編集を押すことで\n"
-            "指定の動作が可能です**\n"
+            "**<:10:1407591891318472794> メッセージ右クリ or 長押し>アプリ から\n"
+            "「メッセージ削除」または「メッセージを編集」を押す**ことで\n"
+            "指定の動作が可能です\n"
             "-# <:5_:1407591193751195698> ※ただし、削除しても事前に通報された場合メッセージ内容は残ります"
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
@@ -493,10 +454,10 @@ class HelpView(discord.ui.View):
             "**ルール改正や処罰、検閲体制の変更、サ終を検討することもあります。**\n"
             "### <:11:1407591910767464459> 基本フリーですが限度を守ってご利用ください\n"
             "https://github.com/y-exe/tokumei-bot\n"
-            "作成者 <@703734573108035715\n\n>"
-            "**メッセージは必ずボタンからメッセージを送信してください!!**"
+            "作成者 <@1418680947850612799>\n\n"
+            "**メッセージは必ずボタンから送信してください!!**"
         )
-        embed.set_image(url="https://i.gyazo.com/ae166f68498a505e4c9db341f8c8f652.png")
+        embed.set_image(url="https://i.gyazo.com/d383abacd30bc6afda9b94227d2af790.png")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 class AnonymousPostView(discord.ui.View):
@@ -506,21 +467,11 @@ class AnonymousPostView(discord.ui.View):
 
     @discord.ui.button(label='クリックして匿名で送信', style=discord.ButtonStyle.primary, emoji='✍️', custom_id='anonymous_post_button')
     async def post_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        try:
-            await interaction.response.send_modal(AnonymousPostModal())
-        except discord.errors.NotFound as e:
-            print(f"モーダル送信時にインタラクションが見つかりませんでした: {e}")
+        await interaction.response.send_modal(AnonymousPostModal())
 
     @discord.ui.button(label='ヘルプ・詳細', style=discord.ButtonStyle.secondary, custom_id='help_button')
     async def help_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = discord.Embed(title="ヘルプ・詳細", color=discord.Color.blue())
-        embed.description = (
-            "**1️⃣ : 利用規約(ルール)\n"
-            "2️⃣ : プライバシーポリシー(ログ保存等)\n"
-            "3️⃣ : メッセージ通報について\n"
-            "4️⃣ : メッセージ削除、メッセージ編集について\n"
-            "5️⃣ : その他詳細**"
-        )
+        embed = discord.Embed(title="ヘルプ・詳細", description="**1️⃣ : 利用規約\n2️⃣ : プライバシーポリシー\n3️⃣ : 通報について\n4️⃣ : 削除・編集について\n5️⃣ : その他詳細**", color=discord.Color.blue())
         await interaction.response.send_message(embed=embed, view=HelpView(self.channel_id), ephemeral=True)
 
 class ReportConfirmView(discord.ui.View):
@@ -603,83 +554,76 @@ async def update_button_message(channel: discord.TextChannel, channel_id: str):
         channel_data = anonymous_channels_data.get(channel_id, {})
         if old_msg_id := channel_data.get("button_message_id"):
             try:
-                old_msg = await channel.fetch_message(old_msg_id)
-                await old_msg.delete()
-            except (discord.NotFound, discord.Forbidden):
-                pass
+                await (await channel.fetch_message(old_msg_id)).delete()
+            except (discord.NotFound, discord.Forbidden): pass
         try:
-            title_text = "<a:1_:1401169042936692776>匿名つぶやき"
-            description_text = (
-                "<a:2_:1401169059235762208>匿名でメッセージを送信できます\n"
-                "ルールや詳細な利用方法などはヘルプ・詳細から確認してください \n"
-                "**必ずボタンからメッセージを送信してください!!**"
-            )
-            embed = discord.Embed(title=title_text, description=description_text, color=discord.Color.dark_theme())
+            embed = discord.Embed(title="<a:1_:1401169042936692776>匿名つぶやき", description="<a:2_:1401169059235762208>匿名でメッセージを送信できます\nルールや詳細はヘルプから確認してください\n**必ずボタンから送信してください!!**", color=discord.Color.dark_theme())
             new_msg = await channel.send(embed=embed, view=AnonymousPostView(channel_id))
-            if channel_id not in anonymous_channels_data:
-                anonymous_channels_data[channel_id] = {}
-            anonymous_channels_data[channel_id]["button_message_id"] = new_msg.id
+            anonymous_channels_data.setdefault(channel_id, {})["button_message_id"] = new_msg.id
             save_json(CHANNELS_FILE, anonymous_channels_data)
         except discord.Forbidden:
-            print(f"エラー: チャンネル {channel.name} ({channel.id}) にメッセージを送信する権限がありません。")
+            print(f"エラー: チャンネル {channel.name} への送信権限がありません。")
 
+@bot.tree.context_menu(name="メッセージに返信")
+async def reply_to_message(interaction: discord.Interaction, message: discord.Message):
+    if not message.webhook_id:
+        await interaction.response.send_message("匿名メッセージにのみ返信できます。", ephemeral=True)
+        return
+
+    message_logs = load_json(MESSAGE_LOGS_FILE, {})
+    log_entry = message_logs.get(str(message.id))
+    if not log_entry or "anonymous_id" not in log_entry:
+        await interaction.response.send_message("返信先のメッセージ情報が見つかりませんでした。", ephemeral=True)
+        return
+    
+    await interaction.response.send_modal(ReplyModal(message, str(log_entry["anonymous_id"])))
 
 @bot.tree.context_menu(name="メッセージを編集")
 async def edit_message(interaction: discord.Interaction, message: discord.Message):
-    log_entry = None
-    for i in range(6): 
-        check_date = datetime.now(timezone.utc) - timedelta(days=i)
-        log_file = get_log_file_path(check_date)
-        if os.path.exists(log_file):
-            message_log = load_json(log_file, {})
-            if str(message.id) in message_log:
-                log_entry = message_log.get(str(message.id))
-                break
+    message_logs = load_json(MESSAGE_LOGS_FILE, {})
+    log_entry = message_logs.get(str(message.id))
     
-    if not log_entry:
-        await interaction.response.send_message("このメッセージの記録が見つかりませんでした。投稿から5日以上経過している可能性があります。", ephemeral=True)
+    if not log_entry or str(interaction.user.id) != log_entry.get("user_id"):
+        await interaction.response.send_message("これはあなたが編集できるメッセージではありません。", ephemeral=True)
         return
-    if str(interaction.user.id) != log_entry.get("user_id"):
-        await interaction.response.send_message("これはあなたが送信したメッセージではありません。", ephemeral=True)
+    
+    channel_data = anonymous_channels_data.get(str(interaction.channel_id), {})
+    if not (webhook_url := channel_data.get("webhook_url")):
+        await interaction.response.send_message("このチャンネルのWebhook設定が見つかりません。", ephemeral=True)
         return
-        
-    modal = EditMessageModal(webhook_url=log_entry["webhook_url"], message_id=message.id)
+
+    modal = EditMessageModal(webhook_url=webhook_url, message_id=message.id)
     modal.message_content.default = message.content
     await interaction.response.send_modal(modal)
 
 @bot.tree.context_menu(name="メッセージを削除")
 async def delete_message(interaction: discord.Interaction, message: discord.Message):
-    log_entry = None
-    log_file_path = None
-    for i in range(6):
-        check_date = datetime.now(timezone.utc) - timedelta(days=i)
-        log_file = get_log_file_path(check_date)
-        if os.path.exists(log_file):
-            message_log = load_json(log_file, {})
-            if str(message.id) in message_log:
-                log_entry = message_log.get(str(message.id))
-                log_file_path = log_file
-                break
+    message_logs = load_json(MESSAGE_LOGS_FILE, {})
+    log_entry = message_logs.get(str(message.id))
 
-    if not log_entry:
-        await interaction.response.send_message("このメッセージの記録が見つかりませんでした。投稿から5日以上経過している可能性があります。", ephemeral=True)
+    if not log_entry or str(interaction.user.id) != log_entry.get("user_id"):
+        await interaction.response.send_message("これはあなたが削除できるメッセージではありません。", ephemeral=True)
         return
-    if str(interaction.user.id) != log_entry.get("user_id"):
-        await interaction.response.send_message("これはあなたが送信したメッセージではありません。", ephemeral=True)
+    
+    channel_data = anonymous_channels_data.get(str(interaction.channel_id), {})
+    if not (webhook_url := channel_data.get("webhook_url")):
+        await interaction.response.send_message("このチャンネルのWebhook設定が見つかりません。", ephemeral=True)
         return
         
     try:
-        webhook = discord.Webhook.from_url(log_entry["webhook_url"], session=bot.http._HTTPClient__session)
-        await webhook.delete_message(message.id)
+        await discord.Webhook.from_url(webhook_url, session=bot.http._HTTPClient__session).delete_message(message.id)
+        await interaction.response.send_message("メッセージを削除しました。", ephemeral=True)
         
-        embed = discord.Embed(title="メッセージを削除しました。", color=discord.Color.green())
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        for i in range(6):
+            log_file = get_log_file_path(datetime.now(timezone.utc) - timedelta(days=i))
+            if os.path.exists(log_file) and str(message.id) in (log_data := load_json(log_file, {})):
+                del log_data[str(message.id)]
+                save_json(log_file, log_data)
+                break
         
-        if log_file_path:
-            message_log = load_json(log_file_path, {})
-            if str(message.id) in message_log:
-                del message_log[str(message.id)]
-                save_json(log_file_path, message_log)
+        del message_logs[str(message.id)]
+        save_json(MESSAGE_LOGS_FILE, message_logs)
+            
     except Exception as e:
         await interaction.response.send_message(f"削除中にエラーが発生しました: {e}", ephemeral=True)
 
@@ -692,7 +636,6 @@ async def report_message(interaction: discord.Interaction, message: discord.Mess
     embed = discord.Embed(title="このメッセージを通報しますか？", color=discord.Color.orange())
     embed.add_field(name="メッセージ内容", value=f"```{message.content[:1000]}```", inline=False)
     await interaction.response.send_message(embed=embed, view=ReportConfirmView(interaction, message), ephemeral=True)
-
 
 async def process_report(interaction: discord.Interaction, message: discord.Message) -> str:
     global report_data, anonymous_channels_data, guild_settings
@@ -716,14 +659,11 @@ async def process_report(interaction: discord.Interaction, message: discord.Mess
         archive_data = load_json(archive_file, {})
         if str(message.id) in archive_data:
             try:
-                webhook_url = archive_data[str(message.id)]["webhook_url"]
-                webhook = discord.Webhook.from_url(webhook_url, session=bot.http._HTTPClient__session)
-                await webhook.delete_message(message.id)
-                del archive_data[str(message.id)]
-                save_json(archive_file, archive_data)
-                return "5日以上前のメッセージのため、通報できません。メッセージは自動的に削除されました。"
+                # この部分は元のコードに存在しないため、コメントアウトまたは削除します。
+                # Webhook URLがarchiveに保存されていないため、メッセージの削除は困難です。
+                return "5日以上前のメッセージのため、通報できません。運営による手動削除をお待ちください。"
             except Exception as e:
-                print(f"アーカイブメッセージ削除エラー: {e}")
+                print(f"アーカイブメッセージ操作エラー: {e}")
                 return "5日以上前のメッセージのため、通報できませんでした。"
         return "通報対象のメッセージ情報が見つかりませんでした。ログが記録されていないか、古いメッセージの可能性があります。"
 
@@ -775,7 +715,7 @@ async def process_report(interaction: discord.Interaction, message: discord.Mess
             return "通報を更新しました。"
         
         else: 
-            if len(current_report["reporters"]) >= report_threshold:
+            if len(current_report['reporters']) >= report_threshold:
                 sent_message = await report_channel.send(embed=embed, view=ReportView(log_entry["user_id"], message.content, message))
                 current_report["log_message_id"] = sent_message.id
                 return "規定数の通報があったため、管理者に通知しました。"
@@ -799,18 +739,18 @@ async def id_lookup(interaction: discord.Interaction, message: str):
     message_id = matches[-1]
     
     log_entry = None
-    for i in range(6):
-        check_date = datetime.now(timezone.utc) - timedelta(days=i)
-        log_file = get_log_file_path(check_date)
-        if os.path.exists(log_file):
-            message_log = load_json(log_file, {})
-            if message_id in message_log:
-                log_entry = message_log.get(message_id)
-                break
-    if not log_entry:
-        archive_file = 'logs/archive.json'
-        archive_data = load_json(archive_file, {})
-        log_entry = archive_data.get(message_id)
+    message_logs = load_json(MESSAGE_LOGS_FILE, {})
+    if message_id in message_logs:
+        log_entry = message_logs[message_id]
+    else: # 5日以内のログもフォールバックとして検索
+        for i in range(6):
+            check_date = datetime.now(timezone.utc) - timedelta(days=i)
+            log_file = get_log_file_path(check_date)
+            if os.path.exists(log_file):
+                day_log = load_json(log_file, {})
+                if message_id in day_log:
+                    log_entry = day_log[message_id]
+                    break
 
     if not log_entry:
         await interaction.followup.send("指定されたメッセージの投稿者情報が見つかりませんでした。", ephemeral=True)
@@ -1014,26 +954,24 @@ async def on_message(message: discord.Message):
         
     channel_id = str(message.channel.id)
     if channel_id in anonymous_channels_data:
-        if message.author.id in ALLOWED_USER_IDS or any(role.id == ALLOWED_ROLE_ID for role in getattr(message.author, 'roles', [])):
-            await bot.process_commands(message)
-            return
-
-        try:
-            await message.delete()
-            embed = discord.Embed(title="メッセージを削除しました", color=discord.Color.red())
-            embed.description = (
-                "匿名チャンネルでは、通常のメッセージ送信はできません。\n"
-                "必ずボタンからメッセージを送信してください。"
-            )
-            embed.add_field(name="送信しようとしたメッセージ", value=f"```{message.content[:1000]}```", inline=False)
-            embed.set_image(url="https://i.gyazo.com/ae166f68498a505e4c9db341f8c8f652.png")
-            await message.author.send(embed=embed)
-        except discord.Forbidden:
-            print(f"メッセージ削除失敗: チャンネル {message.channel.name} で権限がありません。")
-        except discord.NotFound:
-            pass
-        except Exception as e:
-            print(f"メッセージ削除中に予期せぬエラー: {e}")
+        is_admin = message.author.id in ALLOWED_USER_IDS or any(role.id == ALLOWED_ROLE_ID for role in getattr(message.author, 'roles', []))
+        if not is_admin:
+            try:
+                await message.delete()
+                embed = discord.Embed(title="メッセージを削除しました", color=discord.Color.red())
+                embed.description = (
+                    "匿名チャンネルでは、通常のメッセージ送信はできません。\n"
+                    "必ずボタンからメッセージを送信してください。"
+                )
+                embed.add_field(name="送信しようとしたメッセージ", value=f"```{message.content[:1000]}```", inline=False)
+                embed.set_image(url="https://i.gyazo.com/d383abacd30bc6afda9b94227d2af790.png")
+                await message.author.send(embed=embed)
+            except discord.Forbidden:
+                print(f"メッセージ削除失敗: チャンネル {message.channel.name} で権限がありません。")
+            except discord.NotFound:
+                pass
+            except Exception as e:
+                print(f"メッセージ削除中に予期せぬエラー: {e}")
 
     await bot.process_commands(message)
 
@@ -1041,7 +979,6 @@ async def on_message(message: discord.Message):
 async def on_ready():
     global anonymous_channels_data
     print(f'{bot.user}としてログインしました')
-    print('------')
     
     try:
         synced = await bot.tree.sync()
@@ -1060,10 +997,7 @@ async def on_ready():
     
     anonymous_channels_data = load_json(CHANNELS_FILE, {})
     for channel_id, data in list(anonymous_channels_data.items()):
-        channel = bot.get_channel(int(channel_id))
-        if channel:
-            if "logging_enabled" not in data:
-                anonymous_channels_data[channel_id]["logging_enabled"] = True
+        if channel := bot.get_channel(int(channel_id)):
             await update_button_message(channel, channel_id)
         else:
             print(f"チャンネル {channel_id} が見つかりませんでした。設定をスキップします。")
@@ -1096,43 +1030,23 @@ async def setanonymous(ctx):
     if channel_id in anonymous_channels_data:
         await ctx.send("設定を解除しています...")
         channel_data = anonymous_channels_data.get(channel_id, {})
-        if webhook_urls := channel_data.get("webhook_urls"):
-            for url in webhook_urls:
-                try:
-                    webhook = discord.Webhook.from_url(url, session=bot.http._HTTPClient__session)
-                    await webhook.delete()
-                except (discord.NotFound, discord.Forbidden, ValueError):
-                    pass
+        if webhook_url := channel_data.get("webhook_url"):
+            try:
+                await discord.Webhook.from_url(webhook_url, session=bot.http._HTTPClient__session).delete()
+            except (discord.NotFound, discord.Forbidden, ValueError): pass
         if button_msg_id := channel_data.get("button_message_id"):
             try:
-                msg = await ctx.channel.fetch_message(button_msg_id)
-                await msg.delete()
-            except (discord.NotFound, discord.Forbidden):
-                pass
+                await (await ctx.channel.fetch_message(button_msg_id)).delete()
+            except (discord.NotFound, discord.Forbidden): pass
         del anonymous_channels_data[channel_id]
         save_json(CHANNELS_FILE, anonymous_channels_data)
         await ctx.send("このチャンネルの匿名チャット設定を解除しました。")
     else:
         try:
-            await ctx.send(f"Webhookを{WEBHOOK_POOL_SIZE}個、固定アイコンで作成します...")
-            webhook_urls = []
-            async with aiohttp.ClientSession() as session:
-                for i in range(WEBHOOK_POOL_SIZE):
-                    icon_url = AVATAR_URLS[i % len(AVATAR_URLS)]
-                    avatar_bytes = None
-                    try:
-                        async with session.get(icon_url) as resp:
-                            if resp.status == 200:
-                                avatar_bytes = await resp.read()
-                    except Exception as e:
-                        print(f"アイコンのダウンロードに失敗しました: {e}")
-                    webhook = await ctx.channel.create_webhook(name=f"匿名", avatar=avatar_bytes)
-                    webhook_urls.append(webhook.url)
+            await ctx.send("Webhookを1個作成します...")
+            webhook = await ctx.channel.create_webhook(name="匿名")
             anonymous_channels_data[channel_id] = {
-                "webhook_urls": webhook_urls,
-                "last_webhook_url_used": None,
-                "button_message_id": None,
-                "logging_enabled": True
+                "webhook_url": webhook.url, "button_message_id": None, "logging_enabled": True
             }
             save_json(CHANNELS_FILE, anonymous_channels_data)
             await ctx.send(f"{ctx.channel.mention} を匿名チャット用に設定しました。")
@@ -1146,7 +1060,6 @@ async def setanonymous(ctx):
 async def setanonymous_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
         await ctx.send("このコマンドを使用するには、チャンネルの管理権限が必要です。")
-
 
 if __name__ == "__main__":
     TOKEN = os.getenv("DISCORD_BOT_TOKEN")
