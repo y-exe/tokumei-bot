@@ -18,6 +18,8 @@ domains.json
 keywords.json
 banned_users.json
 guild_settings.json
+anonymous_data.json
+message_logs.json
 logs/archive.json
 
 logs/
