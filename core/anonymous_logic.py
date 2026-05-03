@@ -246,7 +246,6 @@ async def process_report(bot, interaction: discord.Interaction, message: discord
                 last_at_str = history.get("last_at")
                 if last_at_str:
                     last_at = datetime.fromisoformat(last_at_str)
-                    # 現在時刻（UTC）との差分を計算
                     now = discord.utils.utcnow()
                     diff = now - last_at
                     days = diff.days
@@ -282,7 +281,19 @@ async def process_report(bot, interaction: discord.Interaction, message: discord
             step = f"既存メッセージ更新 (Msg ID: {current_report['log_message_id']})"
             try:
                 log_message = await report_channel.fetch_message(current_report["log_message_id"])
-                await log_message.edit(embed=embed)
+                from ui.views import ReportView
+                await log_message.edit(embed=embed, view=ReportView(log_entry["user_id"], message.content, message, anonymous_id))
+                
+                all_reports = load_json(REPORTS_FILE, {})
+                all_reports[str(log_message.id)] = {
+                    "user_id": log_entry["user_id"],
+                    "content": message.content,
+                    "original_message_id": message.id,
+                    "original_channel_id": message.channel.id,
+                    "anonymous_id": anonymous_id
+                }
+                save_json(REPORTS_FILE, all_reports)
+                
                 return "通報を更新しました。"
             except (discord.NotFound, discord.Forbidden) as e:
                 print(f"既存メッセージへのアクセス失敗(新規送信に切替): {e}")
@@ -291,8 +302,21 @@ async def process_report(bot, interaction: discord.Interaction, message: discord
         if len(current_report['reporters']) >= report_threshold:
             step = "新規メッセージ送信"
             try:
+                from ui.views import ReportView
                 sent_message = await report_channel.send(embed=embed, view=ReportView(log_entry["user_id"], message.content, message, anonymous_id))
                 current_report["log_message_id"] = sent_message.id
+                
+                # 永続化データの保存
+                all_reports = load_json(REPORTS_FILE, {})
+                all_reports[str(sent_message.id)] = {
+                    "user_id": log_entry["user_id"],
+                    "content": message.content,
+                    "original_message_id": message.id,
+                    "original_channel_id": message.channel.id,
+                    "anonymous_id": anonymous_id
+                }
+                save_json(REPORTS_FILE, all_reports)
+                
                 return "規定数の通報があったため、管理者に通知しました。"
             except discord.Forbidden as e:
                 channel_name = getattr(report_channel, "name", "不明")
