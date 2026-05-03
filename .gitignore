@@ -6,8 +6,4 @@ __pycache__/
 *.bat
 logs/
 *.json
-!channels.json
-!keywords.json
-!domains.json
-!thresholds.json
-!guild_settings.json
+
