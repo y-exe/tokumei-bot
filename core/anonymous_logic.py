@@ -164,7 +164,7 @@ async def update_button_message(bot, channel: discord.TextChannel, channel_id: s
             else:
                 embed = discord.Embed(
                     title="<a:1_:1401169042936692776>匿名つぶやき",
-                    description="<a:2_:1401169059235762208>匿名でメッセージを送信できます\nルールや詳細な利用方法などはヘルプ・詳細から確認してください\n**必ずボタンから送信してください!!**",
+                    description="<a:2_:1401169059235762208>匿名でメッセージを送信できます\n<a:13:1499325976411111495>**新ルール : 一個人ユーザーが特定できる__悪口・批判が含まれる内容の投稿を禁止__します。(運営、やまかわ本人、サーバー全体に関することは可)**\nルールや詳細な利用方法などはヘルプ・詳細から確認してください",
                     color=discord.Color.dark_theme()
                 )
             new_msg = await channel.send(embed=embed, view=post_view_class(channel_id, mode=channel_type))
@@ -208,21 +208,39 @@ async def process_report(bot, interaction: discord.Interaction, message: discord
     if not report_channel_id:
         return "通報を受け付けましたが、サーバーのレポートチャンネルが設定されていません。"
     
-    report_channel = bot.get_channel(int(report_channel_id))
-    if not report_channel:
-        return "通報を受け付けましたが、指定されたレポートチャンネルが見つかりません。"
-
-    thresholds = load_json(THRESHOLDS_FILE, DEFAULT_THRESHOLDS)
-    report_threshold = thresholds.get("report", 3)
-
+    step = "初期化"
     try:
-        sender = await bot.fetch_user(int(log_entry["user_id"]))
+        # ステップ1: チャンネルの特定
+        step = f"チャンネル取得 (ID: {report_channel_id})"
+        report_channel = bot.get_channel(int(report_channel_id))
+        if not report_channel:
+            try:
+                report_channel = await bot.fetch_channel(int(report_channel_id))
+            except discord.NotFound:
+                return f"エラー: 指定されたレポートチャンネル(ID: `{report_channel_id}`)が見つかりません。設定をやり直してください。"
+            except discord.Forbidden:
+                return f"エラー: レポートチャンネル(ID: `{report_channel_id}`)へのアクセス権限(50001)が不足しています。ボットがそのチャンネルを表示できるか確認してください。"
+
+        # ステップ2: ユーザー情報の取得
+        step = f"ユーザー情報取得 (User ID: {log_entry.get('user_id')})"
+        sender = None
+        user_id_str = log_entry.get("user_id")
+        if user_id_str:
+            try:
+                sender = await bot.fetch_user(int(user_id_str))
+            except Exception as e:
+                print(f"警告: ユーザー({user_id_str})の取得に失敗しました: {e}")
+
+        # ステップ3: Embedの作成
+        step = "Embed作成"
+        thresholds = load_json(THRESHOLDS_FILE, DEFAULT_THRESHOLDS)
+        report_threshold = thresholds.get("report", 3)
         
         embed = discord.Embed(title="<:3_:1407591152491827211> 匿名メッセージの通報", color=discord.Color.red())
         embed.add_field(
             name="メッセージの情報",
             value=(
-                f"**<:4_:1407591175275286628> 送信者**: {sender.mention} [`{sender.id}`]\n"
+                f"**<:4_:1407591175275286628> 送信者**: {sender.mention if sender else '不明'} [`{user_id_str if user_id_str else '不明'}`]\n"
                 f"**<:6_:1407591216459153460> 送信時刻**: <t:{int(message.created_at.timestamp())}:F>\n"
                 f"**<:5_:1407591193751195698> 送信内容**: ```{discord.utils.escape_markdown(message.content)[:1000]}```"
             ),
@@ -235,22 +253,33 @@ async def process_report(bot, interaction: discord.Interaction, message: discord
 
         from ui.views import ReportView
 
+        # ステップ4: メッセージの送信または更新
         if current_report["log_message_id"]: 
-            log_message = await report_channel.fetch_message(current_report["log_message_id"])
-            await log_message.edit(embed=embed)
-            return "通報を更新しました。"
+            step = f"既存メッセージ更新 (Msg ID: {current_report['log_message_id']})"
+            try:
+                log_message = await report_channel.fetch_message(current_report["log_message_id"])
+                await log_message.edit(embed=embed)
+                return "通報を更新しました。"
+            except (discord.NotFound, discord.Forbidden) as e:
+                print(f"既存メッセージへのアクセス失敗(新規送信に切替): {e}")
+                current_report["log_message_id"] = None
         
-        else: 
-            if len(current_report['reporters']) >= report_threshold:
+        if len(current_report['reporters']) >= report_threshold:
+            step = "新規メッセージ送信"
+            try:
                 sent_message = await report_channel.send(embed=embed, view=ReportView(log_entry["user_id"], message.content, message))
                 current_report["log_message_id"] = sent_message.id
                 return "規定数の通報があったため、管理者に通知しました。"
-            else:
-                return f"通報を受け付けました。 (現在 {len(current_report['reporters'])}/{report_threshold} 件)"
+            except discord.Forbidden as e:
+                channel_name = getattr(report_channel, "name", "不明")
+                guild_name = getattr(report_channel.guild, "name", "不明") if hasattr(report_channel, "guild") else "不明"
+                return f"エラー: レポートチャンネルへの投稿に失敗しました。\n**送信先**: `{guild_name}` / `#{channel_name}` (ID: `{report_channel.id}`)\n**場所**: `{step}`\n**詳細**: {e}"
+        else:
+            return f"通報を受け付けました。 (現在 {len(current_report['reporters'])}/{report_threshold} 件)"
 
     except Exception as e:
-        print(f"通報処理エラー: {e}")
-        return f"通報処理中に予期せぬエラーが発生しました。"
+        print(f"通報処理エラー [{step}]: {e}")
+        return f"通報処理中にエラーが発生しました。\n**失敗した手順**: `{step}`\n**エラー**: {e}"
 
 def is_authorized(obj: discord.Interaction | discord.Message) -> bool:
     user = obj.user if hasattr(obj, 'user') else obj.author

@@ -109,6 +109,7 @@ class AnonymousPostView(discord.ui.View):
 
     @discord.ui.button(label='画像送信', style=discord.ButtonStyle.success, emoji='🖼️', custom_id='image_post_button')
     async def image_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # 動的に取得/保持したコマンドIDを使用し、メンションを生成
         image_id = getattr(self.bot, "image_command_id", "1488490168854908979")
         mention = f"</image:{image_id}>"
         description_text = f"## 下のボタンを押して画像を挿入してください\n{' '.join([mention] * 24)}"

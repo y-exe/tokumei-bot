@@ -1,0 +1,43 @@
+{
+    "1470449029820190740": {
+        "webhook_url": "https://discord.com/api/webhooks/1488453655454548078/rNVfx_Q9coDaW3xYNVQRm41-KwXcqgnUhrO5833a5FbYUxk1T62mbIQ_hgnzMObPGvb8",
+        "button_message_id": 1488515194802933843,
+        "logging_enabled": true
+    },
+    "1488498813067858010": {
+        "webhook_url": "https://discord.com/api/webhooks/1488498837122449598/xgplSHAvOLYWnzbroVMEHqGNJZ8mI7YGlky3E60WBafAvL9dCqnGHmKnH0HLUud8rXtd",
+        "logging_enabled": true,
+        "channel_type": "request",
+        "button_message_id": 1488515198955425825
+    },
+    "1399966750228877453": {
+        "webhook_url": "https://discord.com/api/webhooks/1488516372697714758/JTUvH-kEeI2-aJNC8PK7RZyX4kA5cRPLA4WD2MTpT8YVm5lvm4GDzvF_BqHf-AZ9BFID",
+        "logging_enabled": false,
+        "channel_type": "normal",
+        "button_message_id": 1499986098095522015
+    },
+    "1401157007691743312": {
+        "webhook_url": "https://discord.com/api/webhooks/1488516534690381956/4HzYuvkimTkl-t9znz2eag9_K58-oCZNdLu71zyRsZPYJLz22BnqEUFCgyfAIFzfMIsS",
+        "logging_enabled": true,
+        "channel_type": "normal",
+        "button_message_id": 1500305406801739807
+    },
+    "1355806665089351721": {
+        "webhook_url": "https://discord.com/api/webhooks/1488520589911130212/WPgb-SHXRI50ITG2YdB2jK2vFt1LLBWsA8XTMWtaXzOrQ_KqbdUExHA4rIrIZi9POjEf",
+        "logging_enabled": true,
+        "channel_type": "request",
+        "button_message_id": 1499730882045677661
+    },
+    "1451462844620214416": {
+        "webhook_url": "https://discord.com/api/webhooks/1488882441061007381/ZE23P_atzba6j0VSvpT1exvz0tROgUYxI1AJre3qoCrawbX-eA-HHTyvHQU9XRRDVTKR",
+        "logging_enabled": true,
+        "channel_type": "request",
+        "button_message_id": 1499762155757506800
+    },
+    "1379516060855959663": {
+        "webhook_url": "https://discord.com/api/webhooks/1488899815344443393/VHbBGBu36081L72kii35LBVxQ0JuzYD1qnacsArmq-xzcTO5mNbbHklvDnLNDZ1udJ5i",
+        "logging_enabled": true,
+        "channel_type": "normal",
+        "button_message_id": 1499403982911836344
+    }
+}
