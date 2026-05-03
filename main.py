@@ -44,10 +44,13 @@ async def on_ready():
     except Exception as e:
         print(f"コマンドの同期に失敗 : {e}")
         bot.image_command_id = "1488490168854908979"
+    from ui.views import AnonymousPostView, ReportView
     for channel_id in anonymous_channels_data:
         mode = anonymous_channels_data[channel_id].get("channel_type", "normal")
         bot.add_view(AnonymousPostView(bot, str(channel_id), anonymous_channels_data, banned_users, button_update_locks, mode=mode))
-    print("匿名投稿用ボタンをリスン")
+    
+    bot.add_view(ReportView())
+    print("匿名投稿用ボタンおよび処罰ボタンをリスン")
         
     archive_old_logs()
     

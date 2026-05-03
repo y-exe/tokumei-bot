@@ -147,20 +147,51 @@ class ReportConfirmView(discord.ui.View):
         self.stop()
 
 class ReportView(discord.ui.View):
-    def __init__(self, user_id: str, content: str, message: discord.Message, anonymous_id: int):
+    def __init__(self, user_id: str = None, content: str = None, message: discord.Message = None, anonymous_id: int = None):
         super().__init__(timeout=None)
         self.user_id = user_id
         self.content = content
         self.message = message
         self.anonymous_id = anonymous_id
 
+    async def _ensure_data(self, interaction: discord.Interaction):
+        """再起動などでデータが失われている場合にファイルから復元する"""
+        if self.user_id is not None:
+            return True
+        
+        from utils.json_helper import load_json
+        from models.constants import REPORTS_FILE
+        all_reports = load_json(REPORTS_FILE, {})
+        data = all_reports.get(str(interaction.message.id))
+        
+        if not data:
+            await interaction.response.send_message("エラー: このレポートのデータが見つかりませんでした（古いレポートか、データが削除されています）。", ephemeral=True)
+            return False
+            
+        self.user_id = data.get("user_id")
+        self.content = data.get("content")
+        self.anonymous_id = data.get("anonymous_id")
+        
+        # オリジナルのメッセージオブジェクトを可能な限り復元
+        orig_msg_id = data.get("original_message_id")
+        orig_chan_id = data.get("original_channel_id")
+        if orig_msg_id and orig_chan_id:
+            try:
+                channel = interaction.client.get_channel(int(orig_chan_id)) or await interaction.client.fetch_channel(int(orig_chan_id))
+                self.message = await channel.fetch_message(int(orig_msg_id))
+            except:
+                self.message = None # メッセージが削除済みなどの場合
+        return True
+
     @discord.ui.button(label="サーバーBAN", style=discord.ButtonStyle.danger, custom_id="server_ban_button")
     async def server_ban_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._ensure_data(interaction): return
         from ui.modals import DiscordPunishConfirmModal
         await interaction.response.send_modal(DiscordPunishConfirmModal(self.user_id, self.content, self.message, "ban", self.anonymous_id, interaction.message))
 
     @discord.ui.button(label="1ヶ月TO(28日間)", style=discord.ButtonStyle.primary, custom_id="timeout_button")
     async def timeout_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._ensure_data(interaction): return
         from ui.modals import DiscordPunishConfirmModal
         await interaction.response.send_modal(DiscordPunishConfirmModal(self.user_id, self.content, self.message, "timeout", self.anonymous_id, interaction.message))
 
