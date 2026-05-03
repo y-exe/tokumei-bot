@@ -12,6 +12,7 @@ from core.anonymous_logic import update_button_message
 from ui.views import AnonymousPostView
 from cogs.chat_cog import ChatCog
 from cogs.admin_cog import AdminCog
+from utils.monitoring import heartbeat_task
 
 load_dotenv()
 
@@ -35,14 +36,16 @@ async def on_ready():
 
     try:
         synced = await bot.tree.sync()
+        # /image コマンドのIDを取得して保存
         image_cmd = next((cmd for cmd in synced if cmd.name == "image"), None)
         if image_cmd:
             bot.image_command_id = str(image_cmd.id)
+            print(f"取得した /image コマンドID: {bot.image_command_id}")
         else:
-            bot.image_command_id = "1488490168854908979"
+            bot.image_command_id = "1488490168854908979" # フォールバック
     except Exception as e:
         print(f"コマンドの同期に失敗 : {e}")
-        bot.image_command_id = "1488490168854908979"
+        bot.image_command_id = "1488490168854908979" # フォールバック
         
     for channel_id in anonymous_channels_data:
         mode = anonymous_channels_data[channel_id].get("channel_type", "normal")
@@ -58,6 +61,7 @@ async def on_ready():
         else:
             print(f"チャンネル {channel_id} が見つかりませんでした。")
             
+    heartbeat_task.start()
     save_json(CHANNELS_FILE, anonymous_channels_data)
 
 if __name__ == "__main__":
