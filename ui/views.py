@@ -17,8 +17,7 @@ class HelpView(discord.ui.View):
             "日本国の法令、Discord利用規約、Discordガイドライン、\nまたは公序良俗に違反する行為、またはそのおそれのある行為\n"
             "それに加えて**個人への過激な誹謗中傷**は禁止しており、\n"
             "**ペナルティーが課される場合があります**\n"
-            "<a:2_:1401169059235762208> 処罰は基本的に`メッセージ削除` `匿名チャット利用権限の削除`\n`DMで警告`です\n"
-            "-# ※場合によってはサーバーBAN・タイムアウトもあります\n"
+            "<a:2_:1401169059235762208> 処罰は `サーバーBAN` `1か月タイムアウト`のみです\n"
             "### なお, この処罰は全て匿名で行います。\n"
             "-# 詳細情報 : https://github.com/y-exe/tokumei-bot/blob/main/TERMS_OF_SERVICE.md\n"
             "-# <:5_:1407591193751195698> また, 本規約は変更される可能性があります"
@@ -160,12 +159,12 @@ class ReportView(discord.ui.View):
         from ui.modals import DiscordPunishConfirmModal
         await interaction.response.send_modal(DiscordPunishConfirmModal(self.user_id, self.content, self.message, "ban", self.anonymous_id, interaction.message))
 
-    @discord.ui.button(label="1ヶ月TO(28日間)", style=discord.ButtonStyle.danger, custom_id="timeout_button")
+    @discord.ui.button(label="1ヶ月TO(28日間)", style=discord.ButtonStyle.primary, custom_id="timeout_button")
     async def timeout_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         from ui.modals import DiscordPunishConfirmModal
         await interaction.response.send_modal(DiscordPunishConfirmModal(self.user_id, self.content, self.message, "timeout", self.anonymous_id, interaction.message))
 
-    @discord.ui.button(label="処罰なし", style=discord.ButtonStyle.primary, custom_id="no_punish_button")
+    @discord.ui.button(label="処罰なし", style=discord.ButtonStyle.secondary, custom_id="no_punish_button")
     async def no_punish_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = interaction.message.embeds[0]
         embed.description = (embed.description or "") + "\n**終了済み**"

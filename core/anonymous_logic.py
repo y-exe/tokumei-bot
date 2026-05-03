@@ -366,11 +366,12 @@ async def execute_discord_punishment(interaction: discord.Interaction, user_id: 
             jump_url = original_report_message.jump_url if original_report_message else "削除済み/取得不可"
             
             log_content = (
-                "**❌処罰通知❌**\n\n"
+                "**❌匿名つぶやき処罰通知❌**\n\n"
                 f"**対象番号**：匿名{anonymous_id:03d}\n"
                 f"**処罰内容**：\n"
                 f"{punish_text}\n"
-                f"**元メッセージ**：{jump_url}"
+                f"**元メッセージ**：{jump_url}\n"
+                "-# (対象メッセージは自動削除されています)"
             )
             await log_channel.send(log_content)
         except Exception as e:
