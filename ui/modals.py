@@ -97,49 +97,63 @@ class EditMessageModal(discord.ui.Modal, title='メッセージを編集'):
         except Exception as e:
             await interaction.response.send_message(f"編集中にエラーが発生しました: {e}", ephemeral=True)
 
-class PunishConfirmModal(discord.ui.Modal, title='<:11:1407591910767464459> 処罰の確認'):
+class ReportDetailModal(discord.ui.Modal, title='メッセージの通報'):
+    detail_input = discord.ui.TextInput(
+        label='補足・詳細 (任意)',
+        style=discord.TextStyle.paragraph,
+        placeholder='未記入でも送信できます',
+        required=False,
+        max_length=1000
+    )
+
+    def __init__(self, bot, original_interaction, message, anonymous_channels_data, report_data):
+        super().__init__()
+        self.bot = bot
+        self.original_interaction = original_interaction
+        self.message = message
+        self.anonymous_channels_data = anonymous_channels_data
+        self.report_data = report_data
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        from core.anonymous_logic import process_report
+        report_detail = self.detail_input.value
+        response_message = await process_report(self.bot, self.original_interaction, self.message, self.anonymous_channels_data, self.report_data, report_detail)
+        await interaction.followup.send(response_message, ephemeral=True)
+
+class DiscordPunishConfirmModal(discord.ui.Modal):
     confirm_text = discord.ui.TextInput(
         label='本当に処罰しますか？',
         style=discord.TextStyle.short,
         placeholder='「はい」と入力してください',
         required=True
     )
-    days_input = discord.ui.TextInput(
-        label='BAN日数 (0で永久)',
-        style=discord.TextStyle.short,
-        placeholder='0',
-        default='0',
-        required=True
-    )
-    reason_input = discord.ui.TextInput(
-        label='処罰の理由',
-        style=discord.TextStyle.paragraph,
-        placeholder='ルール違反のため',
-        default='ルール違反のため',
-        required=True,
-        max_length=500
-    )
 
-    def __init__(self, user_id: str, content: str, original_report_message: discord.Message):
-        super().__init__()
+    def __init__(self, user_id: str, content: str, webhook_message: discord.Message, punish_type: str, anonymous_id: int, report_embed_message: discord.Message):
+        title = "サーバーBANの確認" if punish_type == "ban" else "1ヶ月TOの確認"
+        super().__init__(title=title)
         self.user_id = user_id
         self.content = content
-        self.original_report_message = original_report_message 
+        self.webhook_message = webhook_message
+        self.punish_type = punish_type
+        self.anonymous_id = anonymous_id
+        self.report_embed_message = report_embed_message
 
     async def on_submit(self, interaction: discord.Interaction):
         if self.confirm_text.value.lower() != "はい":
-            await interaction.response.send_message("キャンセルしました。", ephemeral=True)
+            await interaction.response.send_message("処罰をキャンセルしました。", ephemeral=True)
             return
             
-        try:
-            days = int(self.days_input.value)
-        except ValueError:
-            await interaction.response.send_message("日数は数値で入力してください。", ephemeral=True)
-            return
-
-        from ui.views import PunishConfirmView
-        view = PunishConfirmView(self.user_id, self.content, self.original_report_message, days, self.reason_input.value)
-        await interaction.response.send_message("最終確認：本当に処罰しますか？", view=view, ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        from core.anonymous_logic import execute_discord_punishment
+        success, message = await execute_discord_punishment(interaction, self.user_id, self.content, self.webhook_message, self.punish_type, self.anonymous_id)
+        
+        if success and self.report_embed_message and self.report_embed_message.embeds:
+            embed = self.report_embed_message.embeds[0]
+            embed.description = (embed.description or "") + f"\n**終了済み ({'BAN' if self.punish_type == 'ban' else '1ヶ月TO'})**"
+            await self.report_embed_message.edit(embed=embed, view=None)
+        
+        await interaction.followup.send(message, ephemeral=True)
 
 class ManualPunishModal(discord.ui.Modal, title='利用制限の付与'):
     days_input = discord.ui.TextInput(

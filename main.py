@@ -1,4 +1,3 @@
-# main.py
 import discord
 from discord.ext import commands
 import os
@@ -36,17 +35,15 @@ async def on_ready():
 
     try:
         synced = await bot.tree.sync()
-        # /image コマンドのIDを取得して保存
         image_cmd = next((cmd for cmd in synced if cmd.name == "image"), None)
         if image_cmd:
             bot.image_command_id = str(image_cmd.id)
             print(f"取得した /image コマンドID: {bot.image_command_id}")
         else:
-            bot.image_command_id = "1488490168854908979" # フォールバック
+            bot.image_command_id = "1488490168854908979"
     except Exception as e:
         print(f"コマンドの同期に失敗 : {e}")
-        bot.image_command_id = "1488490168854908979" # フォールバック
-        
+        bot.image_command_id = "1488490168854908979"
     for channel_id in anonymous_channels_data:
         mode = anonymous_channels_data[channel_id].get("channel_type", "normal")
         bot.add_view(AnonymousPostView(bot, str(channel_id), anonymous_channels_data, banned_users, button_update_locks, mode=mode))

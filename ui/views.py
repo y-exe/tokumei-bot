@@ -109,7 +109,6 @@ class AnonymousPostView(discord.ui.View):
 
     @discord.ui.button(label='画像送信', style=discord.ButtonStyle.success, emoji='🖼️', custom_id='image_post_button')
     async def image_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 動的に取得/保持したコマンドIDを使用し、メンションを生成
         image_id = getattr(self.bot, "image_command_id", "1488490168854908979")
         mention = f"</image:{image_id}>"
         description_text = f"## 下のボタンを押して画像を挿入してください\n{' '.join([mention] * 24)}"
@@ -137,10 +136,8 @@ class ReportConfirmView(discord.ui.View):
 
     @discord.ui.button(label="はい", style=discord.ButtonStyle.danger)
     async def confirm_report(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        from core.anonymous_logic import process_report
-        response_message = await process_report(self.bot, self.original_interaction, self.message, self.anonymous_channels_data, self.report_data)
-        await interaction.followup.send(response_message, ephemeral=True)
+        from ui.modals import ReportDetailModal
+        await interaction.response.send_modal(ReportDetailModal(self.bot, self.original_interaction, self.message, self.anonymous_channels_data, self.report_data))
         self.stop()
 
     @discord.ui.button(label="キャンセル", style=discord.ButtonStyle.secondary)
@@ -149,16 +146,22 @@ class ReportConfirmView(discord.ui.View):
         self.stop()
 
 class ReportView(discord.ui.View):
-    def __init__(self, user_id: str, content: str, message: discord.Message):
+    def __init__(self, user_id: str, content: str, message: discord.Message, anonymous_id: int):
         super().__init__(timeout=None)
         self.user_id = user_id
         self.content = content
         self.message = message
+        self.anonymous_id = anonymous_id
 
-    @discord.ui.button(label="処罰", style=discord.ButtonStyle.danger, custom_id="punish_button")
-    async def punish_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        from ui.modals import PunishConfirmModal
-        await interaction.response.send_modal(PunishConfirmModal(self.user_id, self.content, interaction.message))
+    @discord.ui.button(label="サーバーBAN", style=discord.ButtonStyle.danger, custom_id="server_ban_button")
+    async def server_ban_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        from ui.modals import DiscordPunishConfirmModal
+        await interaction.response.send_modal(DiscordPunishConfirmModal(self.user_id, self.content, self.message, "ban", self.anonymous_id, interaction.message))
+
+    @discord.ui.button(label="1ヶ月TO(28日間)", style=discord.ButtonStyle.danger, custom_id="timeout_button")
+    async def timeout_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        from ui.modals import DiscordPunishConfirmModal
+        await interaction.response.send_modal(DiscordPunishConfirmModal(self.user_id, self.content, self.message, "timeout", self.anonymous_id, interaction.message))
 
     @discord.ui.button(label="処罰なし", style=discord.ButtonStyle.primary, custom_id="no_punish_button")
     async def no_punish_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -166,66 +169,6 @@ class ReportView(discord.ui.View):
         embed.description = (embed.description or "") + "\n**終了済み**"
         await interaction.message.edit(embed=embed, view=None)
         await interaction.response.send_message("処罰なしで処理を終了しました。", ephemeral=True)
-
-    @discord.ui.button(label="メッセージを確認", style=discord.ButtonStyle.secondary, custom_id="view_message_button")
-    async def view_message_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(f"メッセージリンク: {self.message.jump_url}", ephemeral=True)
-
-class PunishConfirmView(discord.ui.View):
-    def __init__(self, user_id: str, content: str, original_report_message: discord.Message, days: int, reason: str):
-        super().__init__(timeout=300)
-        self.user_id = user_id
-        self.content = content
-        self.original_report_message = original_report_message
-        self.days = days
-        self.reason = reason
-
-    @discord.ui.button(label="はい", style=discord.ButtonStyle.danger)
-    async def confirm_punish(self, interaction: discord.Interaction, button: discord.ui.Button):
-        from utils.json_helper import load_json, save_json
-        from models.constants import BANNED_USERS_FILE
-        banned_users = load_json(BANNED_USERS_FILE, {})
-        
-        expires_at = None
-        if self.days > 0:
-            expires_at = (datetime.now() + timedelta(days=self.days)).isoformat()
-            
-        banned_users[self.user_id] = {
-            "reason": self.reason, 
-            "message_content": self.content,
-            "expires_at": expires_at
-        }
-        save_json(BANNED_USERS_FILE, banned_users)
-
-        try:
-            user = await interaction.client.fetch_user(int(self.user_id))
-            ban_type = f"{self.days}日間の制限" if self.days > 0 else "無期限の制限"
-            embed = discord.Embed(
-                title="<:12:1407591937728577599> 匿名チャット利用制限",
-                description=f"利用規約遵守のため, 匿名チャットの利用が制限されました。\n種別: **{ban_type}**",
-                color=discord.Color.red()
-            )
-            embed.add_field(name="理由", value=self.reason, inline=False)
-            embed.add_field(name="違反メッセージ", value=f"```{self.content[:1000]}```", inline=False)
-            if expires_at:
-                exp_ts = int(datetime.fromisoformat(expires_at).timestamp())
-                embed.add_field(name="解除予定", value=f"<t:{exp_ts}:F>", inline=False)
-            await user.send(embed=embed)
-        except Exception as e:
-            print(f"DM送信エラー: {e}")
-
-        if self.original_report_message.embeds:
-            embed = self.original_report_message.embeds[0]
-            embed.description = (embed.description or "") + "\n**終了済み**"
-            await self.original_report_message.edit(embed=embed, view=None)
-        
-        await interaction.response.send_message(f"処罰（{ban_type}）を実行しました。", ephemeral=True)
-        self.stop()
-
-    @discord.ui.button(label="キャンセル", style=discord.ButtonStyle.secondary)
-    async def cancel_punish(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message("キャンセルしました。", ephemeral=True)
-        self.stop()
 
 class UserStateView(discord.ui.View):
     def __init__(self, target_user_id: str, is_banned: bool, interaction: discord.Interaction):

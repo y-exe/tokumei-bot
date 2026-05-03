@@ -136,8 +136,6 @@ class ChatCog(commands.Cog):
         if message.author.bot: return
         channel_id = str(message.channel.id)
         if channel_id in self.anonymous_channels_data:
-            # 要望用チャンネル（request）の場合はメッセージを削除しないが、
-            # ボタンメッセージを最下部に維持（リスン）するために更新を行う
             channel_data = self.anonymous_channels_data[channel_id]
             if channel_data.get("channel_type") == "request":
                 from core.anonymous_logic import update_button_message
