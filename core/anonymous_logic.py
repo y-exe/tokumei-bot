@@ -164,7 +164,7 @@ async def update_button_message(bot, channel: discord.TextChannel, channel_id: s
             else:
                 embed = discord.Embed(
                     title="<a:1_:1401169042936692776>匿名つぶやき",
-                    description="<a:2_:1401169059235762208>匿名でメッセージを送信できます\n<a:13:1499325976411111495>**新ルール : 一個人ユーザーが特定できる__悪口・批判が含まれる内容の投稿を禁止__します。(運営、やまかわ本人、サーバー全体に関することは可)**\nルールや詳細な利用方法などはヘルプ・詳細から確認してください",
+                    description="<a:2_:1401169059235762208>匿名でメッセージを送信できます\n<a:13:1499325976411111495>**新ルール : 一個人ユーザーが特定できる__悪口・批判が含まれる内容の投稿を禁止__します。(運営、やまかわ本人、サーバー全体に関することは可)**\n-# 違反した場合サーバーBANか最大1ヶ月間のタイムアウトが課されます\nルールや詳細な利用方法などはヘルプ・詳細から確認してください",
                     color=discord.Color.dark_theme()
                 )
             new_msg = await channel.send(embed=embed, view=post_view_class(channel_id, mode=channel_type))
