@@ -173,7 +173,7 @@ async def update_button_message(bot, channel: discord.TextChannel, channel_id: s
         except discord.Forbidden:
             print(f"エラー: チャンネル {channel.name} への送信権限がありません。")
 
-async def process_report(bot, interaction: discord.Interaction, message: discord.Message, anonymous_channels_data, report_data):
+async def process_report(bot, interaction: discord.Interaction, message: discord.Message, anonymous_channels_data, report_data, report_detail: str = None):
     if not anonymous_channels_data.get(str(interaction.channel.id), {}).get("logging_enabled", False):
         return "このチャンネルではログ保存がOFFのため、通報は無効です。"
 
@@ -210,7 +210,6 @@ async def process_report(bot, interaction: discord.Interaction, message: discord
     
     step = "初期化"
     try:
-        # ステップ1: チャンネルの特定
         step = f"チャンネル取得 (ID: {report_channel_id})"
         report_channel = bot.get_channel(int(report_channel_id))
         if not report_channel:
@@ -221,7 +220,6 @@ async def process_report(bot, interaction: discord.Interaction, message: discord
             except discord.Forbidden:
                 return f"エラー: レポートチャンネル(ID: `{report_channel_id}`)へのアクセス権限(50001)が不足しています。ボットがそのチャンネルを表示できるか確認してください。"
 
-        # ステップ2: ユーザー情報の取得
         step = f"ユーザー情報取得 (User ID: {log_entry.get('user_id')})"
         sender = None
         user_id_str = log_entry.get("user_id")
@@ -231,29 +229,55 @@ async def process_report(bot, interaction: discord.Interaction, message: discord
             except Exception as e:
                 print(f"警告: ユーザー({user_id_str})の取得に失敗しました: {e}")
 
-        # ステップ3: Embedの作成
         step = "Embed作成"
         thresholds = load_json(THRESHOLDS_FILE, DEFAULT_THRESHOLDS)
         report_threshold = thresholds.get("report", 3)
         
+        message_logs = load_json(MESSAGE_LOGS_FILE, {})
+        anonymous_id = message_logs.get(str(message.id), {}).get("anonymous_id", 0)
+        
         embed = discord.Embed(title="<:3_:1407591152491827211> 匿名メッセージの通報", color=discord.Color.red())
+        
+        punishment_history = load_json(PUNISHMENT_HISTORY_FILE, {})
+        if user_id_str and user_id_str in punishment_history:
+            history = punishment_history[user_id_str]
+            if isinstance(history, dict):
+                count = history.get("count", 1)
+                last_at_str = history.get("last_at")
+                if last_at_str:
+                    last_at = datetime.fromisoformat(last_at_str)
+                    # 現在時刻（UTC）との差分を計算
+                    now = discord.utils.utcnow()
+                    diff = now - last_at
+                    days = diff.days
+                    
+                    if days == 0:
+                        days_text = "本日"
+                    else:
+                        days_text = f"{days}日前"
+                    
+                    embed.description = f"**⚠️ このユーザーは以前匿名つぶやきで {count}回目 最終{days_text}に タイムアウトの処罰をされています。**\n"
+                else:
+                    embed.description = f"**⚠️ このユーザーは以前匿名つぶやきで {count}回目 タイムアウトの処罰をされています。**\n"
+            else:
+                embed.description = "**⚠️ このユーザーは以前匿名つぶやきでタイムアウトの処罰をされています。**\n"
+        
         embed.add_field(
             name="メッセージの情報",
             value=(
-                f"**<:4_:1407591175275286628> 送信者**: {sender.mention if sender else '不明'} [`{user_id_str if user_id_str else '不明'}`]\n"
                 f"**<:6_:1407591216459153460> 送信時刻**: <t:{int(message.created_at.timestamp())}:F>\n"
                 f"**<:5_:1407591193751195698> 送信内容**: ```{discord.utils.escape_markdown(message.content)[:1000]}```"
             ),
             inline=False
         )
+        if report_detail:
+            embed.add_field(name="補足・詳細", value=f"```{discord.utils.escape_markdown(report_detail)[:1000]}```", inline=False)
+            
         embed.add_field(name="<:8_:1407591279243825162> 報告人数", value=f"{len(current_report['reporters'])}人", inline=False)
         embed.add_field(name="<:7_:1407591242656911391> 報告者", value=" ".join(f"<@{uid}>" for uid in current_report['reporters']), inline=False)
-        if sender:
-            embed.set_thumbnail(url=sender.display_avatar.url)
 
         from ui.views import ReportView
 
-        # ステップ4: メッセージの送信または更新
         if current_report["log_message_id"]: 
             step = f"既存メッセージ更新 (Msg ID: {current_report['log_message_id']})"
             try:
@@ -267,7 +291,7 @@ async def process_report(bot, interaction: discord.Interaction, message: discord
         if len(current_report['reporters']) >= report_threshold:
             step = "新規メッセージ送信"
             try:
-                sent_message = await report_channel.send(embed=embed, view=ReportView(log_entry["user_id"], message.content, message))
+                sent_message = await report_channel.send(embed=embed, view=ReportView(log_entry["user_id"], message.content, message, anonymous_id))
                 current_report["log_message_id"] = sent_message.id
                 return "規定数の通報があったため、管理者に通知しました。"
             except discord.Forbidden as e:
@@ -289,3 +313,67 @@ def is_authorized(obj: discord.Interaction | discord.Message) -> bool:
     if any(role.id == ALLOWED_ROLE_ID for role in user_roles):
         return True
     return False
+
+async def execute_discord_punishment(interaction: discord.Interaction, user_id: str, content: str, original_report_message: discord.Message, punish_type: str, anonymous_id: int):
+    try:
+        user = await interaction.guild.fetch_member(int(user_id))
+    except discord.NotFound:
+        return False, "ユーザーがサーバー内に見つかりませんでした。"
+    except Exception as e:
+        return False, f"ユーザー取得エラー: {e}"
+
+    if punish_type == "ban":
+        try:
+            await user.ban(reason="匿名メッセージでのルール違反 (サーバーBAN)")
+            punish_text = "サーバーBANを実施しました。"
+        except Exception as e:
+            return False, f"サーバーBANの実行に失敗しました: {e}"
+    else:
+        try:
+            await user.timeout(discord.utils.utcnow() + timedelta(days=27, hours=23, minutes=59), reason="匿名メッセージでのルール違反 (1ヶ月TO)")
+            punish_text = "一か月タイムアウトを実施しました。"
+            
+            punishment_history = load_json(PUNISHMENT_HISTORY_FILE, {})
+            history = punishment_history.get(user_id, {"count": 0, "last_at": None})
+            if not isinstance(history, dict):
+                history = {"count": 1, "last_at": None}
+            
+            history["count"] += 1
+            history["last_at"] = discord.utils.utcnow().isoformat()
+            punishment_history[user_id] = history
+            save_json(PUNISHMENT_HISTORY_FILE, punishment_history)
+        except Exception as e:
+            return False, f"タイムアウトの実行に失敗しました: {e}"
+
+    if original_report_message:
+        try:
+            await original_report_message.delete()
+        except Exception as e:
+            print(f"元メッセージ削除失敗: {e}")
+            pass
+
+    guild_settings = load_json(GUILD_SETTINGS_FILE, {})
+    guild_id = str(interaction.guild.id)
+    guild_data = guild_settings.get(guild_id, {})
+    punish_log_channel_id = guild_data.get("punish_log_channel_id")
+    
+    if punish_log_channel_id:
+        try:
+            log_channel = interaction.client.get_channel(int(punish_log_channel_id))
+            if not log_channel:
+                log_channel = await interaction.client.fetch_channel(int(punish_log_channel_id))
+            
+            jump_url = original_report_message.jump_url if original_report_message else "削除済み/取得不可"
+            
+            log_content = (
+                "**❌処罰通知❌**\n\n"
+                f"**対象番号**：匿名{anonymous_id:03d}\n"
+                f"**処罰内容**：\n"
+                f"{punish_text}\n"
+                f"**元メッセージ**：{jump_url}"
+            )
+            await log_channel.send(log_content)
+        except Exception as e:
+            print(f"処罰ログ送信エラー: {e}")
+
+    return True, f"処罰（{punish_text}）を実行しました。"

@@ -34,7 +34,24 @@ class AdminCog(commands.Cog):
     async def _setup_channel(self, ctx, channel_type):
         channel_id = str(ctx.channel.id)
         
-        # 既存のWebhookの存在確認（名前で判定）
+        if channel_id in self.anonymous_channels_data:
+            old_msg_id = self.anonymous_channels_data[channel_id].get("button_message_id")
+            if old_msg_id:
+                try:
+                    msg = await ctx.channel.fetch_message(old_msg_id)
+                    await msg.delete()
+                except (discord.NotFound, discord.Forbidden):
+                    pass
+            
+            del self.anonymous_channels_data[channel_id]
+            save_json(CHANNELS_FILE, self.anonymous_channels_data)
+            
+            await ctx.send("このチャンネルの匿名設定を解除しました。", delete_after=10)
+            try:
+                await ctx.message.delete()
+            except: pass
+            return
+
         webhooks = await ctx.channel.webhooks()
         webhook = next((wh for wh in webhooks if wh.name == "Tokumei Webhook"), None)
         if not webhook:
@@ -51,7 +68,6 @@ class AdminCog(commands.Cog):
         }
         save_json(CHANNELS_FILE, self.anonymous_channels_data)
         
-        # ボタンメッセージの作成/更新
         await update_button_message(
             self.bot, ctx.channel, channel_id, self.anonymous_channels_data, self.button_update_locks,
             lambda cid, mode="normal": AnonymousPostView(self.bot, cid, self.anonymous_channels_data, self.banned_users, self.button_update_locks, mode=mode)
@@ -207,90 +223,14 @@ class AdminCog(commands.Cog):
                 embed.add_field(name=f"ID: {uid}", value=f"ユーザー: <@{uid}>\n理由: {reason}\n解除: {exp_val}", inline=False)
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="id", description="メッセージIDから匿名投稿の送信者を特定します。")
-    @app_commands.describe(message_id="特定したいメッセージのIDまたはURL")
-    async def identify_user(self, interaction: discord.Interaction, message_id: str):
-        if not is_authorized(interaction):
-            await interaction.response.send_message("この操作を行う権限がありません。", ephemeral=True)
-            return
 
-        await interaction.response.defer(ephemeral=True)
-        
-        # IDの抽出 (URL対応)
-        import re
-        matches = re.findall(r'(\d{17,20})', message_id)
-        if not matches:
-            await interaction.followup.send("有効なメッセージIDまたはURLを指定してください。", ephemeral=True)
-            return
-        actual_id = matches[-1]
-
-        log_entry = None
-        # 1. 最近のログ (message_logs.json) から検索
-        message_logs = load_json(MESSAGE_LOGS_FILE, {})
-        if actual_id in message_logs:
-            log_entry = message_logs[actual_id]
-        else:
-            # 2. 過去5日分をさかのぼって個別ログファイルを検索 (以前のコードのロジック)
-            from utils.logging_helper import get_log_file_path
-            from datetime import timezone, timedelta
-            for i in range(6):
-                check_date = datetime.now(timezone.utc) - timedelta(days=i)
-                log_file = get_log_file_path(check_date)
-                if os.path.exists(log_file):
-                    day_log = load_json(log_file, {})
-                    if actual_id in day_log:
-                        log_entry = day_log[actual_id]
-                        break
-
-        if not log_entry:
-            await interaction.followup.send("指定されたメッセージのログが見つかりませんでした。（期限切れまたは無効なIDです）", ephemeral=True)
-            return
-
-        user_id = log_entry.get("user_id")
-        anon_id = log_entry.get("anonymous_id")
-
-        try:
-            target_user = await self.bot.fetch_user(int(user_id))
-            
-            # メッセージ内容の取得を試行 (サーバー全体のテキストチャネルを検索)
-            original_message = None
-            for channel in interaction.guild.text_channels:
-                try:
-                    original_message = await channel.fetch_message(int(actual_id))
-                    break
-                except (discord.NotFound, discord.Forbidden):
-                    continue
-            
-            embed = discord.Embed(title="送信者情報", color=discord.Color.blue())
-            
-            if target_user:
-                embed.set_thumbnail(url=target_user.display_avatar.url)
-                embed.add_field(name="送信者", value=f"{target_user.mention} [`{target_user.id}`]", inline=False)
-            else:
-                embed.add_field(name="送信者", value=f"不明なユーザー (`{user_id}`)", inline=False)
-            
-            embed.add_field(name="メッセージID", value=f"`{actual_id}`", inline=True)
-            if anon_id is not None:
-                embed.add_field(name="匿名ID", value=f"`{anon_id:03d}`", inline=True)
-            
-            if original_message:
-                embed.add_field(name="送信時間", value=f"<t:{int(original_message.created_at.timestamp())}:F>", inline=False)
-                if original_message.content:
-                    content_snippet = (original_message.content[:700] + '...') if len(original_message.content) > 700 else original_message.content
-                    embed.add_field(name="メッセージ内容", value=f"```\n{discord.utils.escape_markdown(content_snippet)}\n```", inline=False)
-                if original_message.attachments:
-                    embed.add_field(name="添付ファイル", value=original_message.attachments[0].url, inline=False)
-            
-            await interaction.followup.send(embed=embed, ephemeral=True)
-            
-        except Exception as e:
-            await interaction.followup.send(f"情報の取得中にエラーが発生しました: {e}", ephemeral=True)
 
     @app_commands.command(name="log", description="ログ関連の設定（スイッチ・チャンネル）を行います。")
     @app_commands.describe(action="実行する操作", value="設定値（ON/OFF または チャンネル）")
     @app_commands.choices(action=[
         app_commands.Choice(name="ON/OFF切替", value="switch"),
-        app_commands.Choice(name="通知チャンネル設定", value="channel")
+        app_commands.Choice(name="通知チャンネル設定", value="channel"),
+        app_commands.Choice(name="処罰ログチャンネル設定", value="punish_channel")
     ])
     async def log_manage(self, interaction: discord.Interaction, action: str, value: str = None, channel: discord.TextChannel = None):
         if not is_authorized(interaction):
@@ -318,6 +258,15 @@ class AdminCog(commands.Cog):
             guild_settings.setdefault(guild_id, {})["report_channel_id"] = str(channel.id)
             save_json(GUILD_SETTINGS_FILE, guild_settings)
             await interaction.response.send_message(f"ログチャンネルを {channel.mention} に設定しました。", ephemeral=True)
+        elif action == "punish_channel":
+            if not channel:
+                await interaction.response.send_message("処罰ログ通知先のチャンネルを指定してください。", ephemeral=True)
+                return
+            guild_settings = load_json(GUILD_SETTINGS_FILE, {})
+            guild_id = str(interaction.guild.id)
+            guild_settings.setdefault(guild_id, {})["punish_log_channel_id"] = str(channel.id)
+            save_json(GUILD_SETTINGS_FILE, guild_settings)
+            await interaction.response.send_message(f"処罰ログチャンネルを {channel.mention} に設定しました。", ephemeral=True)
 
     @app_commands.command(name="ban", description="ユーザーを手動でBANします。")
     @app_commands.describe(user_id="BANするユーザーのID", days="BAN日数 (0で永久)", reason="BANの理由")
