@@ -1,5 +1,4 @@
 import discord
-from datetime import datetime, timedelta
 from ui.modals import AnonymousPostModal, ReplyModal
 
 # ヘルプ・詳細のところ
@@ -93,12 +92,11 @@ class HelpView(discord.ui.View):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 class AnonymousPostView(discord.ui.View):
-    def __init__(self, bot, channel_id: str, anonymous_channels_data, banned_users, button_update_locks, mode="normal"):
+    def __init__(self, bot, channel_id: str, anonymous_channels_data, button_update_locks, mode="normal"):
         super().__init__(timeout=None)
         self.bot = bot
         self.channel_id = channel_id
         self.anonymous_channels_data = anonymous_channels_data
-        self.banned_users = banned_users
         self.button_update_locks = button_update_locks
         
         if mode == "request":
@@ -106,7 +104,7 @@ class AnonymousPostView(discord.ui.View):
 
     @discord.ui.button(label='クリックして匿名で送信', style=discord.ButtonStyle.primary, emoji='✍️', custom_id='anonymous_post_button')
     async def post_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(AnonymousPostModal(self.bot, self.anonymous_channels_data, self.banned_users, self.button_update_locks))
+        await interaction.response.send_modal(AnonymousPostModal(self.bot, self.anonymous_channels_data, self.button_update_locks))
 
     @discord.ui.button(label='画像送信', style=discord.ButtonStyle.success, emoji='🖼️', custom_id='image_post_button')
     async def image_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -202,73 +200,3 @@ class ReportView(discord.ui.View):
         await interaction.message.edit(embed=embed, view=None)
         await interaction.response.send_message("処罰なしで処理を終了しました。", ephemeral=True)
 
-class UserStateView(discord.ui.View):
-    def __init__(self, target_user_id: str, is_banned: bool, interaction: discord.Interaction):
-        super().__init__(timeout=180)
-        self.target_user_id = target_user_id
-        self.is_banned = is_banned
-        self.interaction = interaction
-        self.update_buttons()
-
-    def update_buttons(self):
-        self.clear_items()
-        if self.is_banned:
-            self.add_item(discord.ui.Button(label="BANを解除", style=discord.ButtonStyle.success, custom_id="unban_user"))
-        else:
-            self.add_item(discord.ui.Button(label="BANを付与", style=discord.ButtonStyle.danger, custom_id="ban_user"))
-        self.children[0].callback = self.button_callback
-    
-    async def button_callback(self, interaction: discord.Interaction):
-        from core.anonymous_logic import is_authorized
-        if not is_authorized(interaction):
-            await interaction.response.send_message("この操作を行う権限がありません。", ephemeral=True)
-            return
-        
-        from utils.json_helper import load_json, save_json
-        from models.constants import BANNED_USERS_FILE
-        banned_users = load_json(BANNED_USERS_FILE, {})
-        
-        result_text = ""
-        if self.is_banned:
-            if self.target_user_id in banned_users:
-                del banned_users[self.target_user_id]
-                save_json(BANNED_USERS_FILE, banned_users)
-                result_text = "BANを解除しました。"
-                self.is_banned = False
-                
-                try:
-                    user = await interaction.client.fetch_user(int(self.target_user_id))
-                    embed = discord.Embed(
-                        title="<:10:1407591891318472794> 匿名チャット利用制限の解除",
-                        description="運営によって, 匿名チャットの利用制限が解除されました。\n現在は通常通り投稿が可能です。",
-                        color=discord.Color.green()
-                    )
-                    await user.send(embed=embed)
-                except Exception as e:
-                    print(f"解除DM送信エラー: {e}")
-            else:
-                result_text = "このユーザーは既にBANされていませんでした。"
-        else:
-            if self.target_user_id not in banned_users:
-                from ui.modals import ManualPunishModal
-                await interaction.response.send_modal(ManualPunishModal(self.target_user_id, self))
-                return
-            else:
-                result_text = "このユーザーは既にBANされています。"
-
-        for item in self.children:
-            item.disabled = True
-            
-        original_embed = interaction.message.embeds[0]
-        original_embed.add_field(name="実行結果", value=result_text, inline=False)
-        original_embed.color = discord.Color.green() if not self.is_banned else discord.Color.red()
-        
-        await interaction.response.edit_message(embed=original_embed, view=self)
-        self.stop()
-    
-    async def on_timeout(self):
-        for item in self.children:
-            item.disabled = True
-        try:
-            await self.interaction.edit_original_response(view=self)
-        except: pass

@@ -9,10 +9,9 @@ from core.anonymous_logic import update_button_message, is_authorized
 from ui.views import AnonymousPostView, ReportView
 
 class AdminCog(commands.Cog):
-    def __init__(self, bot, anonymous_channels_data, banned_users, button_update_locks):
+    def __init__(self, bot, anonymous_channels_data, button_update_locks):
         self.bot = bot
         self.anonymous_channels_data = anonymous_channels_data
-        self.banned_users = banned_users
         self.button_update_locks = button_update_locks
 
     @commands.Cog.listener()
@@ -69,7 +68,7 @@ class AdminCog(commands.Cog):
         
         await update_button_message(
             self.bot, ctx.channel, channel_id, self.anonymous_channels_data, self.button_update_locks,
-            lambda cid, mode="normal": AnonymousPostView(self.bot, cid, self.anonymous_channels_data, self.banned_users, self.button_update_locks, mode=mode)
+            lambda cid, mode="normal": AnonymousPostView(self.bot, cid, self.anonymous_channels_data, self.button_update_locks, mode=mode)
         )
         
         try:
@@ -144,8 +143,7 @@ class AdminCog(commands.Cog):
     @app_commands.describe(category="表示するカテゴリ")
     @app_commands.choices(category=[
         app_commands.Choice(name="禁止キーワード (word)", value="word"),
-        app_commands.Choice(name="禁止ドメイン (domain)", value="domain"),
-        app_commands.Choice(name="制限ユーザー (ban)", value="ban")
+        app_commands.Choice(name="禁止ドメイン (domain)", value="domain")
     ])
     async def list_commands(self, interaction: discord.Interaction, category: str):
         if not is_authorized(interaction):
@@ -160,16 +158,6 @@ class AdminCog(commands.Cog):
             domains = load_json(DOMAINS_FILE, DEFAULT_DOMAINS)
             embed = discord.Embed(title="禁止ドメイン一覧", description=", ".join(f"`{d}`" for d in domains) or "なし", color=discord.Color.blue())
             await interaction.response.send_message(embed=embed, ephemeral=True)
-        elif category == "ban":
-            embed = discord.Embed(
-                title="利用制限ユーザー一覧",
-                description="旧仕様の「匿名チャットだけ利用制限」は現在無効です。処罰は `/ban id:` からサーバーBANまたは1ヶ月TOで実行してください。",
-                color=discord.Color.blue()
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
-
-
-
     @app_commands.command(name="log", description="ログ関連の設定（スイッチ・チャンネル）を行います。")
     @app_commands.describe(action="実行する操作", value="設定値（ON/OFF または チャンネル）")
     @app_commands.choices(action=[
@@ -299,5 +287,5 @@ class AdminCog(commands.Cog):
         view = ReportView(log_entry["user_id"], message.content, message, anonymous_id)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-async def setup(bot, anonymous_channels_data, banned_users, button_update_locks):
-    await bot.add_cog(AdminCog(bot, anonymous_channels_data, banned_users, button_update_locks))
+async def setup(bot, anonymous_channels_data, button_update_locks):
+    await bot.add_cog(AdminCog(bot, anonymous_channels_data, button_update_locks))

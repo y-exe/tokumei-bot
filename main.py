@@ -1,7 +1,6 @@
 import discord
 from discord.ext import commands
 import os
-import asyncio
 from dotenv import load_dotenv
 
 from models.constants import *
@@ -22,16 +21,14 @@ intents.guilds = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 anonymous_channels_data = load_json(CHANNELS_FILE, {})
-banned_users = load_json(BANNED_USERS_FILE, {})
-guild_settings = load_json(GUILD_SETTINGS_FILE, {})
 button_update_locks = {}
 
 @bot.event
 async def on_ready():
     print(f'{bot.user} login')
     
-    await bot.add_cog(ChatCog(bot, anonymous_channels_data, banned_users, button_update_locks))
-    await bot.add_cog(AdminCog(bot, anonymous_channels_data, banned_users, button_update_locks))
+    await bot.add_cog(ChatCog(bot, anonymous_channels_data, button_update_locks))
+    await bot.add_cog(AdminCog(bot, anonymous_channels_data, button_update_locks))
 
     try:
         synced = await bot.tree.sync()
@@ -47,7 +44,7 @@ async def on_ready():
     from ui.views import AnonymousPostView, ReportView
     for channel_id in anonymous_channels_data:
         mode = anonymous_channels_data[channel_id].get("channel_type", "normal")
-        bot.add_view(AnonymousPostView(bot, str(channel_id), anonymous_channels_data, banned_users, button_update_locks, mode=mode))
+        bot.add_view(AnonymousPostView(bot, str(channel_id), anonymous_channels_data, button_update_locks, mode=mode))
     
     bot.add_view(ReportView())
     print("匿名投稿用ボタンおよび処罰ボタンをリスン")
@@ -57,7 +54,7 @@ async def on_ready():
     for channel_id in list(anonymous_channels_data.keys()):
         if channel := bot.get_channel(int(channel_id)):
             mode = anonymous_channels_data[channel_id].get("channel_type", "normal")
-            await update_button_message(bot, channel, channel_id, anonymous_channels_data, button_update_locks, lambda cid, mode=mode: AnonymousPostView(bot, cid, anonymous_channels_data, banned_users, button_update_locks, mode=mode))
+            await update_button_message(bot, channel, channel_id, anonymous_channels_data, button_update_locks, lambda cid, mode=mode: AnonymousPostView(bot, cid, anonymous_channels_data, button_update_locks, mode=mode))
         else:
             print(f"チャンネル {channel_id} が見つかりませんでした。")
             
