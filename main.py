@@ -61,7 +61,8 @@ async def on_ready():
         else:
             print(f"チャンネル {channel_id} が見つかりませんでした。")
             
-    heartbeat_task.start()
+    if not heartbeat_task.is_running():
+        heartbeat_task.start()
     save_json(CHANNELS_FILE, anonymous_channels_data)
 
 if __name__ == "__main__":
