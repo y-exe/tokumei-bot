@@ -338,7 +338,7 @@ def is_authorized(obj: discord.Interaction | discord.Message) -> bool:
         return True
     return False
 
-async def execute_discord_punishment(interaction: discord.Interaction, user_id: str, content: str, original_report_message: discord.Message, punish_type: str, anonymous_id: int):
+async def execute_discord_punishment(interaction: discord.Interaction, user_id: str, content: str, original_report_message: discord.Message, punish_type: str, anonymous_id: int, punish_reason: str):
     try:
         user = await interaction.guild.fetch_member(int(user_id))
     except discord.NotFound:
@@ -348,13 +348,13 @@ async def execute_discord_punishment(interaction: discord.Interaction, user_id: 
 
     if punish_type == "ban":
         try:
-            await user.ban(reason="匿名メッセージでのルール違反 (サーバーBAN)")
+            await user.ban(reason=punish_reason)
             punish_text = "サーバーBANを実施しました。"
         except Exception as e:
             return False, f"サーバーBANの実行に失敗しました: {e}"
     else:
         try:
-            await user.timeout(discord.utils.utcnow() + timedelta(days=27, hours=23, minutes=59), reason="匿名メッセージでのルール違反 (1ヶ月TO)")
+            await user.timeout(discord.utils.utcnow() + timedelta(days=27, hours=23, minutes=59), reason=punish_reason)
             punish_text = "一か月タイムアウトを実施しました。"
             
             punishment_history = load_json(PUNISHMENT_HISTORY_FILE, {})
@@ -387,17 +387,17 @@ async def execute_discord_punishment(interaction: discord.Interaction, user_id: 
             if not log_channel:
                 log_channel = await interaction.client.fetch_channel(int(punish_log_channel_id))
             
-            jump_url = original_report_message.jump_url if original_report_message else "削除済み/取得不可"
+            original_message_link = f"[匿名つぶやき]({original_report_message.jump_url})" if original_report_message else "匿名つぶやき"
             
             log_content = (
-                "**❌匿名つぶやき処罰通知❌**\n\n"
-                f"**対象番号**：匿名{anonymous_id:03d}\n"
-                f"**処罰内容**：\n"
+                "❌匿名つぶやき処罰通知❌\n\n"
+                f"対象番号：匿名{anonymous_id:03d}\n"
+                f"処罰理由：{punish_reason}\n"
                 f"{punish_text}\n"
-                f"**元メッセージ**：{jump_url}\n"
-                "-# (対象メッセージは自動削除されています)"
+                f"元メッセージ：{original_message_link}\n"
+                "(対象メッセージは自動削除されています)"
             )
-            await log_channel.send(log_content)
+            await log_channel.send(log_content, allowed_mentions=discord.AllowedMentions.none())
         except Exception as e:
             print(f"処罰ログ送信エラー: {e}")
 
