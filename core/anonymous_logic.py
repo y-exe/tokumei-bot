@@ -7,47 +7,6 @@ from models.constants import *
 from utils.json_helper import load_json, save_json
 from utils.logging_helper import get_log_file_path
 
-async def check_ban(interaction: discord.Interaction):
-    # めも 旧仕様: banned_users.json による匿名つぶやきだけ利用制限ですが
-    # 現在は Discord 標準のサーバーBAN/タイムアウトへ移行したため無効化。
-    return False
-
-    user_id_str = str(interaction.user.id)
-    banned_users = load_json(BANNED_USERS_FILE, {})
-    if user_id_str not in banned_users:
-        return False
-
-    user_ban_info = banned_users[user_id_str]
-    expires_at_str = user_ban_info.get("expires_at")
-    
-    if expires_at_str:
-        try:
-            expires_at = datetime.fromisoformat(expires_at_str)
-            if datetime.now() > expires_at:
-                del banned_users[user_id_str]
-                save_json(BANNED_USERS_FILE, banned_users)
-                return False
-            else:
-                embed = discord.Embed(
-                    title="投稿エラー", 
-                    description=f"規定のルール違反により、匿名チャットの利用が制限されています。\n**解除予定時刻**: <t:{int(expires_at.timestamp())}:F>", 
-                    color=discord.Color.red()
-                )
-                if interaction.response.is_done():
-                    await interaction.followup.send(embed=embed, ephemeral=True)
-                else:
-                    await interaction.response.send_message(embed=embed, ephemeral=True)
-                return True
-        except ValueError:
-            pass
-    
-    embed = discord.Embed(title="投稿エラー", description="ルール違反のため、匿名チャットの利用制限（永久）が課されています。", color=discord.Color.red())
-    if interaction.response.is_done():
-        await interaction.followup.send(embed=embed, ephemeral=True)
-    else:
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-    return True
-
 async def send_anonymous_message(bot, interaction: discord.Interaction, content: str, anonymous_channels_data, attachment=None):
     channel_id = str(interaction.channel.id)
     channel_data = anonymous_channels_data.get(channel_id)

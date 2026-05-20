@@ -1,9 +1,8 @@
 import discord
 import re
-from datetime import datetime
 from models.constants import *
-from utils.json_helper import load_json, save_json
-from core.anonymous_logic import send_anonymous_message, update_button_message, check_ban
+from utils.json_helper import load_json
+from core.anonymous_logic import send_anonymous_message, update_button_message
 
 class AnonymousPostModal(discord.ui.Modal, title='匿名メッセージを送信'):
     content_input = discord.ui.TextInput(
@@ -11,17 +10,14 @@ class AnonymousPostModal(discord.ui.Modal, title='匿名メッセージを送信
         placeholder='ここに送信したいメッセージを入力してください...', required=True, max_length=2000
     )
 
-    def __init__(self, bot, anonymous_channels_data, banned_users, button_update_locks):
+    def __init__(self, bot, anonymous_channels_data, button_update_locks):
         super().__init__()
         self.bot = bot
         self.anonymous_channels_data = anonymous_channels_data
-        self.banned_users = banned_users
         self.button_update_locks = button_update_locks
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=False)
-        if await check_ban(interaction):
-            return
 
         blocked_keywords = load_json(KEYWORDS_FILE, DEFAULT_KEYWORDS)
         for keyword in blocked_keywords:
@@ -38,7 +34,7 @@ class AnonymousPostModal(discord.ui.Modal, title='匿名メッセージを送信
         from ui.views import AnonymousPostView
         channel_data = self.anonymous_channels_data.get(str(interaction.channel.id), {})
         mode = channel_data.get("channel_type", "normal")
-        view_factory = lambda cid, mode=mode: AnonymousPostView(self.bot, cid, self.anonymous_channels_data, self.banned_users, self.button_update_locks, mode=mode)
+        view_factory = lambda cid, mode=mode: AnonymousPostView(self.bot, cid, self.anonymous_channels_data, self.button_update_locks, mode=mode)
 
         if not await send_anonymous_message(self.bot, interaction, self.content_input.value, self.anonymous_channels_data):
             await interaction.followup.send('メッセージの送信中にエラーが発生しました。', ephemeral=True)
@@ -51,19 +47,16 @@ class ReplyModal(discord.ui.Modal, title="メッセージに返信"):
         placeholder="返信メッセージを入力してください...", required=True, max_length=1900
     )
 
-    def __init__(self, bot, target_message: discord.Message, target_anonymous_id: str, anonymous_channels_data, banned_users, button_update_locks):
+    def __init__(self, bot, target_message: discord.Message, target_anonymous_id: str, anonymous_channels_data, button_update_locks):
         super().__init__()
         self.bot = bot
         self.target_message = target_message
         self.target_anonymous_id = target_anonymous_id
         self.anonymous_channels_data = anonymous_channels_data
-        self.banned_users = banned_users
         self.button_update_locks = button_update_locks
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=False)
-        if await check_ban(interaction):
-            return
         
         reply_prefix = f"[>>{self.target_anonymous_id}]({self.target_message.jump_url})\n"
         full_content = reply_prefix + self.content_input.value
@@ -71,7 +64,7 @@ class ReplyModal(discord.ui.Modal, title="メッセージに返信"):
         from ui.views import AnonymousPostView
         channel_data = self.anonymous_channels_data.get(str(interaction.channel.id), {})
         mode = channel_data.get("channel_type", "normal")
-        view_factory = lambda cid, mode=mode: AnonymousPostView(self.bot, cid, self.anonymous_channels_data, self.banned_users, self.button_update_locks, mode=mode)
+        view_factory = lambda cid, mode=mode: AnonymousPostView(self.bot, cid, self.anonymous_channels_data, self.button_update_locks, mode=mode)
 
         if not await send_anonymous_message(self.bot, interaction, full_content, self.anonymous_channels_data):
             await interaction.followup.send('返信の送信中にエラーが発生しました。', ephemeral=True)
@@ -159,76 +152,3 @@ class DiscordPunishConfirmModal(discord.ui.Modal, title='処罰理由を書き�
         
         await interaction.followup.send(message, ephemeral=True)
 
-class ManualPunishModal(discord.ui.Modal, title='利用制限の付与'):
-    days_input = discord.ui.TextInput(
-        label='BAN日数 (0で永久)',
-        style=discord.TextStyle.short,
-        placeholder='0',
-        default='0',
-        required=True
-    )
-    reason_input = discord.ui.TextInput(
-        label='BAN理由',
-        style=discord.TextStyle.paragraph,
-        placeholder='理由を入力してください',
-        default='手動による制限',
-        required=True,
-        max_length=500
-    )
-
-    def __init__(self, user_id: str, view_to_update=None):
-        super().__init__()
-        self.user_id = user_id
-        self.view_to_update = view_to_update
-
-    async def on_submit(self, interaction: discord.Interaction):
-        from utils.json_helper import load_json, save_json
-        from models.constants import BANNED_USERS_FILE
-        from datetime import datetime, timedelta
-        
-        try:
-            days = int(self.days_input.value)
-        except ValueError:
-            await interaction.response.send_message("日数は数値で入力してください。", ephemeral=True)
-            return
-
-        banned_users = load_json(BANNED_USERS_FILE, {})
-        expires_at = None
-        if days > 0:
-            expires_at = (datetime.now() + timedelta(days=days)).isoformat()
-            
-        banned_users[self.user_id] = {
-            "reason": self.reason_input.value,
-            "message_content": "Manual BAN (via Status)",
-            "expires_at": expires_at
-        }
-        save_json(BANNED_USERS_FILE, banned_users)
-
-        ban_type = f"{days}日間の制限" if days > 0 else "無期限の制限"
-        try:
-            target_user = await interaction.client.fetch_user(int(self.user_id))
-            embed = discord.Embed(
-                title="<:12:1407591937728577599> 匿名チャット利用制限",
-                description=f"運営によって、匿名チャットの利用が制限されました。\n種別: **{ban_type}**",
-                color=discord.Color.red()
-            )
-            embed.add_field(name="理由", value=self.reason_input.value, inline=False)
-            if expires_at:
-                exp_ts = int(datetime.fromisoformat(expires_at).timestamp())
-                embed.add_field(name="解除予定", value=f"<t:{exp_ts}:F>", inline=False)
-            await target_user.send(embed=embed)
-            dm_status = "（通知DM送信済み）"
-        except Exception:
-            dm_status = "（通知DM送信失敗）"
-
-        if self.view_to_update:
-            self.view_to_update.is_banned = True
-            for item in self.view_to_update.children:
-                item.disabled = True
-            
-            original_embed = interaction.message.embeds[0]
-            original_embed.add_field(name="実行結果", value=f"BAN（{ban_type}）を付与しました。{dm_status}", inline=False)
-            original_embed.color = discord.Color.red()
-            await interaction.response.edit_message(embed=original_embed, view=self.view_to_update)
-        else:
-            await interaction.response.send_message(f"ユーザー `{self.user_id}` を {ban_type} でBANしました。{dm_status}", ephemeral=True)

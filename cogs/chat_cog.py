@@ -12,10 +12,9 @@ from ui.modals import ReplyModal, EditMessageModal
 from ui.views import AnonymousPostView
 
 class ChatCog(commands.Cog):
-    def __init__(self, bot, anonymous_channels_data, banned_users, button_update_locks):
+    def __init__(self, bot, anonymous_channels_data, button_update_locks):
         self.bot = bot
         self.anonymous_channels_data = anonymous_channels_data
-        self.banned_users = banned_users
         self.button_update_locks = button_update_locks
         self.report_data = {}
 
@@ -48,7 +47,7 @@ class ChatCog(commands.Cog):
         
         modal = ReplyModal(
             self.bot, message, str(log_entry["anonymous_id"]),
-            self.anonymous_channels_data, self.banned_users, self.button_update_locks
+            self.anonymous_channels_data, self.button_update_locks
         )
         await interaction.response.send_modal(modal)
 
@@ -107,9 +106,7 @@ class ChatCog(commands.Cog):
             await interaction.response.send_message("このチャンネルは匿名チャンネルではありません。", ephemeral=True)
             return
 
-        from core.anonymous_logic import check_ban, send_anonymous_message
-        if await check_ban(interaction):
-            return
+        from core.anonymous_logic import send_anonymous_message
 
         if content:
             blocked_keywords = load_json(KEYWORDS_FILE, DEFAULT_KEYWORDS)
@@ -125,7 +122,7 @@ class ChatCog(commands.Cog):
             from ui.views import AnonymousPostView
             channel_data = self.anonymous_channels_data.get(str(interaction.channel.id), {})
             mode = channel_data.get("channel_type", "normal")
-            view_factory = lambda cid, mode=mode: AnonymousPostView(self.bot, cid, self.anonymous_channels_data, self.banned_users, self.button_update_locks, mode=mode)
+            view_factory = lambda cid, mode=mode: AnonymousPostView(self.bot, cid, self.anonymous_channels_data, self.button_update_locks, mode=mode)
             await update_button_message(self.bot, interaction.channel, str(interaction.channel.id), self.anonymous_channels_data, self.button_update_locks, view_factory)
             await interaction.followup.send("画像を投稿しました。", ephemeral=True)
         else:
@@ -141,7 +138,7 @@ class ChatCog(commands.Cog):
                 from core.anonymous_logic import update_button_message
                 from ui.views import AnonymousPostView
                 mode = "request"
-                view_factory = lambda cid, mode=mode: AnonymousPostView(self.bot, cid, self.anonymous_channels_data, self.banned_users, self.button_update_locks, mode=mode)
+                view_factory = lambda cid, mode=mode: AnonymousPostView(self.bot, cid, self.anonymous_channels_data, self.button_update_locks, mode=mode)
                 await update_button_message(self.bot, message.channel, channel_id, self.anonymous_channels_data, self.button_update_locks, view_factory)
                 return
 
@@ -162,5 +159,5 @@ class ChatCog(commands.Cog):
                 except Exception as e:
                     print(f"メッセージ削除中の予期せぬエラー: {e}")
 
-async def setup(bot, anonymous_channels_data, banned_users, button_update_locks):
-    await bot.add_cog(ChatCog(bot, anonymous_channels_data, banned_users, button_update_locks))
+async def setup(bot, anonymous_channels_data, button_update_locks):
+    await bot.add_cog(ChatCog(bot, anonymous_channels_data, button_update_locks))
