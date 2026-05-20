@@ -121,17 +121,17 @@ class ReportDetailModal(discord.ui.Modal, title='メッセージの通報'):
         response_message = await process_report(self.bot, self.original_interaction, self.message, self.anonymous_channels_data, self.report_data, report_detail)
         await interaction.followup.send(response_message, ephemeral=True)
 
-class DiscordPunishConfirmModal(discord.ui.Modal):
-    confirm_text = discord.ui.TextInput(
-        label='本当に処罰しますか？',
-        style=discord.TextStyle.short,
-        placeholder='「はい」と入力してください',
-        required=True
+class DiscordPunishConfirmModal(discord.ui.Modal, title='処罰理由を書き込んで下さい'):
+    reason_input = discord.ui.TextInput(
+        label='処罰理由',
+        style=discord.TextStyle.paragraph,
+        placeholder='処罰理由を書き込んで下さい',
+        required=True,
+        max_length=500
     )
 
     def __init__(self, user_id: str, content: str, webhook_message: discord.Message, punish_type: str, anonymous_id: int, report_embed_message: discord.Message):
-        title = "サーバーBANの確認" if punish_type == "ban" else "1ヶ月TOの確認"
-        super().__init__(title=title)
+        super().__init__()
         self.user_id = user_id
         self.content = content
         self.webhook_message = webhook_message
@@ -140,13 +140,17 @@ class DiscordPunishConfirmModal(discord.ui.Modal):
         self.report_embed_message = report_embed_message
 
     async def on_submit(self, interaction: discord.Interaction):
-        if self.confirm_text.value.lower() != "はい":
-            await interaction.response.send_message("処罰をキャンセルしました。", ephemeral=True)
-            return
-            
         await interaction.response.defer(ephemeral=True)
         from core.anonymous_logic import execute_discord_punishment
-        success, message = await execute_discord_punishment(interaction, self.user_id, self.content, self.webhook_message, self.punish_type, self.anonymous_id)
+        success, message = await execute_discord_punishment(
+            interaction,
+            self.user_id,
+            self.content,
+            self.webhook_message,
+            self.punish_type,
+            self.anonymous_id,
+            self.reason_input.value
+        )
         
         if success and self.report_embed_message and self.report_embed_message.embeds:
             embed = self.report_embed_message.embeds[0]
