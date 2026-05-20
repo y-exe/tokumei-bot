@@ -90,35 +90,16 @@ class AdminCog(commands.Cog):
             await interaction.followup.send("指定されたIDのユーザーが見つかりませんでした。", ephemeral=True)
             return
 
-        banned_users = load_json(BANNED_USERS_FILE, {})
-        is_banned = user_id in banned_users
-
-        embed = discord.Embed(title="ユーザー状態", color=discord.Color.red() if is_banned else discord.Color.green())
+        embed = discord.Embed(title="ユーザー状態", color=discord.Color.green())
         embed.set_thumbnail(url=target_user.display_avatar.url)
         embed.add_field(name="ユーザー", value=f"{target_user.mention} (`{user_id}`)", inline=False)
-        
-        if is_banned:
-            ban_info = banned_users[user_id]
-            reason = ban_info.get('reason', '理由なし')
-            expires_at_str = ban_info.get('expires_at')
-            
-            embed.add_field(name="状態", value="<:12:1407591937728577599> **BANされています**", inline=False)
-            embed.add_field(name="理由", value=reason, inline=False)
-            
-            if expires_at_str:
-                try:
-                    exp_ts = int(datetime.fromisoformat(expires_at_str).timestamp())
-                    embed.add_field(name="解除予定", value=f"<t:{exp_ts}:F> (<t:{exp_ts}:R>)", inline=False)
-                except ValueError:
-                    embed.add_field(name="解除予定", value="無期限", inline=False)
-            else:
-                embed.add_field(name="解除予定", value="無期限", inline=False)
-        else:
-            embed.add_field(name="状態", value="<:10:1407591891318472794> **正常です**", inline=False)
-            
-        from ui.views import UserStateView
-        view = UserStateView(target_user_id=user_id, is_banned=is_banned, interaction=interaction)
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        embed.add_field(name="状態", value="<:10:1407591891318472794> **正常です**", inline=False)
+        embed.add_field(
+            name="旧匿名チャット利用制限",
+            value="現在はDiscord標準のサーバーBAN/タイムアウトへ移行したため、この画面からの付与・解除は無効です。",
+            inline=False
+        )
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="border", description="通報が管理者に通知されるまでの閾値を設定します。")
     @app_commands.describe(count="必要通報人数")
@@ -205,21 +186,11 @@ class AdminCog(commands.Cog):
             embed = discord.Embed(title="禁止ドメイン一覧", description=", ".join(f"`{d}`" for d in domains) or "なし", color=discord.Color.blue())
             await interaction.response.send_message(embed=embed, ephemeral=True)
         elif category == "ban":
-            banned_users = load_json(BANNED_USERS_FILE, {})
-            if not banned_users:
-                await interaction.response.send_message("現在制限されているユーザーはいません。", ephemeral=True)
-                return
-            embed = discord.Embed(title="利用制限ユーザー一覧", color=discord.Color.red())
-            for uid, info in banned_users.items():
-                reason = info.get('reason', '理由なし')
-                exp_str = info.get('expires_at')
-                if exp_str:
-                    try:
-                        exp_ts = int(datetime.fromisoformat(exp_str).timestamp())
-                        exp_val = f"<t:{exp_ts}:F> (<t:{exp_ts}:R>)"
-                    except ValueError: exp_val = "無期限"
-                else: exp_val = "無期限"
-                embed.add_field(name=f"ID: {uid}", value=f"ユーザー: <@{uid}>\n理由: {reason}\n解除: {exp_val}", inline=False)
+            embed = discord.Embed(
+                title="利用制限ユーザー一覧",
+                description="旧仕様の「匿名チャットだけ利用制限」は現在無効です。処罰は `/ban id:` からサーバーBANまたは1ヶ月TOで実行してください。",
+                color=discord.Color.blue()
+            )
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
