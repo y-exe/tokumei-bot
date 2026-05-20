@@ -1,11 +1,12 @@
 import discord
-from datetime import datetime, timedelta
+from datetime import datetime
 from discord.ext import commands
 from discord import app_commands
+import re
 from models.constants import *
 from utils.json_helper import load_json, save_json
 from core.anonymous_logic import update_button_message, is_authorized
-from ui.views import AnonymousPostView
+from ui.views import AnonymousPostView, ReportView
 
 class AdminCog(commands.Cog):
     def __init__(self, bot, anonymous_channels_data, banned_users, button_update_locks):
@@ -22,13 +23,11 @@ class AdminCog(commands.Cog):
     @commands.command(name="setyoubou")
     @commands.has_permissions(manage_channels=True)
     async def set_youbou(self, ctx):
-        """要望用チャンネルとして設定します（!setyoubou）"""
         await self._setup_channel(ctx, "request")
 
     @commands.command(name="set")
     @commands.has_permissions(manage_channels=True)
     async def set_normal(self, ctx):
-        """通常の匿名チャンネルとして設定します（!set）"""
         await self._setup_channel(ctx, "normal")
 
     async def _setup_channel(self, ctx, channel_type):
@@ -268,38 +267,91 @@ class AdminCog(commands.Cog):
             save_json(GUILD_SETTINGS_FILE, guild_settings)
             await interaction.response.send_message(f"処罰ログチャンネルを {channel.mention} に設定しました。", ephemeral=True)
 
-    @app_commands.command(name="ban", description="ユーザーを手動でBANします。")
-    @app_commands.describe(user_id="BANするユーザーのID", days="BAN日数 (0で永久)", reason="BANの理由")
-    async def manual_ban(self, interaction: discord.Interaction, user_id: str, days: int, reason: str = "理由なし"):
+    def _extract_message_id(self, value: str) -> str | None:
+        match = re.search(r"(\d{17,20})$", value.strip())
+        return match.group(1) if match else None
+
+    async def _fetch_logged_message(self, interaction: discord.Interaction, message_id: str, source: str):
+        url_match = re.search(r"discord(?:app)?\.com/channels/\d+/(\d{17,20})/(\d{17,20})", source)
+        channel_ids = []
+        if url_match:
+            channel_ids.append(url_match.group(1))
+        channel_ids.extend(cid for cid in self.anonymous_channels_data.keys() if cid not in channel_ids)
+
+        for channel_id in channel_ids:
+            try:
+                channel = interaction.client.get_channel(int(channel_id)) or await interaction.client.fetch_channel(int(channel_id))
+                if getattr(channel, "guild", None) and channel.guild.id != interaction.guild.id:
+                    continue
+                return await channel.fetch_message(int(message_id))
+            except (discord.NotFound, discord.Forbidden):
+                continue
+            except Exception as e:
+                print(f"/ban メッセージ取得エラー (channel={channel_id}, message={message_id}): {e}")
+        return None
+
+    def _build_punish_embed(self, message: discord.Message, log_entry: dict, anonymous_id: int):
+        embed = discord.Embed(title="<:3_:1407591152491827211> 匿名メッセージの通報", color=discord.Color.red())
+
+        punishment_history = load_json(PUNISHMENT_HISTORY_FILE, {})
+        user_id = log_entry.get("user_id")
+        if user_id and user_id in punishment_history:
+            history = punishment_history[user_id]
+            if isinstance(history, dict):
+                count = history.get("count", 1)
+                last_at_str = history.get("last_at")
+                if last_at_str:
+                    try:
+                        last_at = datetime.fromisoformat(last_at_str)
+                        diff = discord.utils.utcnow() - last_at
+                        days_text = "本日" if diff.days == 0 else f"{diff.days}日前"
+                        embed.description = f"**⚠️ このユーザーは以前匿名つぶやきで {count}回目 最終{days_text}に タイムアウトの処罰をされています。**\n"
+                    except ValueError:
+                        embed.description = f"**⚠️ このユーザーは以前匿名つぶやきで {count}回目 タイムアウトの処罰をされています。**\n"
+                else:
+                    embed.description = f"**⚠️ このユーザーは以前匿名つぶやきで {count}回目 タイムアウトの処罰をされています。**\n"
+            else:
+                embed.description = "**⚠️ このユーザーは以前匿名つぶやきでタイムアウトの処罰をされています。**\n"
+
+        embed.add_field(
+            name="メッセージの情報",
+            value=(
+                f"**<:6_:1407591216459153460> 送信時刻**: <t:{int(message.created_at.timestamp())}:F>\n"
+                f"**<:5_:1407591193751195698> 送信内容**: ```{discord.utils.escape_markdown(message.content)[:1000]}```"
+            ),
+            inline=False
+        )
+        embed.add_field(name="<:8_:1407591279243825162> 報告人数", value="手動指定", inline=False)
+        embed.add_field(name="<:7_:1407591242656911391> 報告者", value="手動指定", inline=False)
+        return embed
+
+    @app_commands.command(name="ban", description="匿名メッセージID/URLから処罰メニューを表示します。")
+    @app_commands.describe(id="匿名メッセージのIDまたはメッセージURL")
+    async def manual_ban(self, interaction: discord.Interaction, id: str):
         if not is_authorized(interaction):
             await interaction.response.send_message("権限がありません。", ephemeral=True)
             return
-        banned_users = load_json(BANNED_USERS_FILE, {})
-        expires_at = None
-        if days > 0:
-            expires_at = (datetime.now() + timedelta(days=days)).isoformat()
-        banned_users[user_id] = {
-            "reason": reason,
-            "message_content": "Manual BAN",
-            "expires_at": expires_at
-        }
-        save_json(BANNED_USERS_FILE, banned_users)
-        ban_type = f"{days}日間の制限" if days > 0 else "無期限の制限"
-        try:
-            target_user = await self.bot.fetch_user(int(user_id))
-            embed = discord.Embed(
-                title="<:12:1407591937728577599> 匿名チャット利用制限",
-                description=f"運営によって, 匿名チャットの利用が制限されました。\n種別: **{ban_type}**",
-                color=discord.Color.red()
-            )
-            embed.add_field(name="理由", value=reason, inline=False)
-            if expires_at:
-                exp_ts = int(datetime.fromisoformat(expires_at).timestamp())
-                embed.add_field(name="解除予定", value=f"<t:{exp_ts}:F>", inline=False)
-            await target_user.send(embed=embed)
-            dm_status = "（通知DM送信済み）"
-        except Exception: dm_status = "（通知DM送信失敗）"
-        await interaction.response.send_message(f"ユーザー `{user_id}` を {ban_type} でBANしました。{dm_status}", ephemeral=True)
+
+        message_id = self._extract_message_id(id)
+        if not message_id:
+            await interaction.response.send_message("メッセージIDまたはメッセージURLを入力してください。", ephemeral=True)
+            return
+
+        message_logs = load_json(MESSAGE_LOGS_FILE, {})
+        log_entry = message_logs.get(message_id)
+        if not log_entry:
+            await interaction.response.send_message("そのメッセージIDは直近の匿名ログにありません。archive側のログは対象外です。", ephemeral=True)
+            return
+
+        message = await self._fetch_logged_message(interaction, message_id, id)
+        if not message:
+            await interaction.response.send_message("ログにはありますが、対象メッセージを取得できませんでした。削除済み、またはBotに閲覧権限がない可能性があります。", ephemeral=True)
+            return
+
+        anonymous_id = log_entry.get("anonymous_id", 0)
+        embed = self._build_punish_embed(message, log_entry, anonymous_id)
+        view = ReportView(log_entry["user_id"], message.content, message, anonymous_id)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 async def setup(bot, anonymous_channels_data, banned_users, button_update_locks):
     await bot.add_cog(AdminCog(bot, anonymous_channels_data, banned_users, button_update_locks))
