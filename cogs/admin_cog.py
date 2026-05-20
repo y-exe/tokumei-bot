@@ -76,31 +76,6 @@ class AdminCog(commands.Cog):
             await ctx.message.delete()
         except: pass
 
-    @app_commands.command(name="state", description="ユーザーの状態を確認・変更します。")
-    @app_commands.describe(user_id="状態を確認するユーザーのID")
-    async def state(self, interaction: discord.Interaction, user_id: str):
-        if not is_authorized(interaction):
-            await interaction.response.send_message("この操作を行う権限がありません。", ephemeral=True)
-            return
-
-        await interaction.response.defer(ephemeral=True)
-        try:
-            target_user = await self.bot.fetch_user(int(user_id))
-        except (discord.NotFound, ValueError):
-            await interaction.followup.send("指定されたIDのユーザーが見つかりませんでした。", ephemeral=True)
-            return
-
-        embed = discord.Embed(title="ユーザー状態", color=discord.Color.green())
-        embed.set_thumbnail(url=target_user.display_avatar.url)
-        embed.add_field(name="ユーザー", value=f"{target_user.mention} (`{user_id}`)", inline=False)
-        embed.add_field(name="状態", value="<:10:1407591891318472794> **正常です**", inline=False)
-        embed.add_field(
-            name="旧匿名チャット利用制限",
-            value="現在はDiscord標準のサーバーBAN/タイムアウトへ移行したため、この画面からの付与・解除は無効です。",
-            inline=False
-        )
-        await interaction.followup.send(embed=embed, ephemeral=True)
-
     @app_commands.command(name="border", description="通報が管理者に通知されるまでの閾値を設定します。")
     @app_commands.describe(count="必要通報人数")
     async def border_count(self, interaction: discord.Interaction, count: int):
