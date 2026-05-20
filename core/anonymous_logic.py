@@ -8,6 +8,10 @@ from utils.json_helper import load_json, save_json
 from utils.logging_helper import get_log_file_path
 
 async def check_ban(interaction: discord.Interaction):
+    # めも 旧仕様: banned_users.json による匿名つぶやきだけ利用制限ですが
+    # 現在は Discord 標準のサーバーBAN/タイムアウトへ移行したため無効化。
+    return False
+
     user_id_str = str(interaction.user.id)
     banned_users = load_json(BANNED_USERS_FILE, {})
     if user_id_str not in banned_users:
