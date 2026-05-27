@@ -2,6 +2,7 @@ import os
 import re
 from datetime import datetime, timedelta, timezone
 from utils.json_helper import load_json, save_json
+from utils import db
 
 def get_log_file_path(date):
     log_dir = f'logs/{date.strftime("%Y/%m")}'
@@ -9,6 +10,9 @@ def get_log_file_path(date):
     return f'{log_dir}/{date.strftime("%d")}.json'
 
 def archive_old_logs():
+    if db.is_enabled():
+        return
+
     archive_file = 'logs/archive.json'
     os.makedirs('logs', exist_ok=True)
     archive_data = load_json(archive_file, {})

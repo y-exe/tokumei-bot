@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 
 from models.constants import *
 from utils.json_helper import load_json, save_json
+from utils import db
 from utils.logging_helper import archive_old_logs
 from core.anonymous_logic import update_button_message
 from ui.views import AnonymousPostView
@@ -13,6 +14,7 @@ from cogs.admin_cog import AdminCog
 from utils.monitoring import heartbeat_task
 
 load_dotenv()
+db.initialize_database()
 
 intents = discord.Intents.default()
 intents.messages = True

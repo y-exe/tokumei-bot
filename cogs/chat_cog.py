@@ -7,6 +7,7 @@ from datetime import datetime, timezone, timedelta
 from models.constants import *
 from utils.json_helper import load_json, save_json
 from utils.logging_helper import get_log_file_path
+from utils import db
 from core.anonymous_logic import send_anonymous_message, update_button_message, is_authorized
 from ui.modals import ReplyModal, EditMessageModal
 from ui.views import AnonymousPostView
@@ -39,8 +40,7 @@ class ChatCog(commands.Cog):
             await interaction.response.send_message("匿名メッセージにのみ返信できます。", ephemeral=True)
             return
 
-        message_logs = load_json(MESSAGE_LOGS_FILE, {})
-        log_entry = message_logs.get(str(message.id))
+        log_entry = db.get_message_log(str(message.id)) if db.is_enabled() else load_json(MESSAGE_LOGS_FILE, {}).get(str(message.id))
         if not log_entry or "anonymous_id" not in log_entry:
             await interaction.response.send_message("返信先のメッセージ情報が見つかりませんでした。", ephemeral=True)
             return
@@ -52,8 +52,7 @@ class ChatCog(commands.Cog):
         await interaction.response.send_modal(modal)
 
     async def edit_message(self, interaction: discord.Interaction, message: discord.Message):
-        message_logs = load_json(MESSAGE_LOGS_FILE, {})
-        log_entry = message_logs.get(str(message.id))
+        log_entry = db.get_message_log(str(message.id)) if db.is_enabled() else load_json(MESSAGE_LOGS_FILE, {}).get(str(message.id))
         
         if not log_entry or str(interaction.user.id) != log_entry.get("user_id"):
             await interaction.response.send_message("これはあなたが編集できるメッセージではありません。", ephemeral=True)
@@ -69,8 +68,8 @@ class ChatCog(commands.Cog):
         await interaction.response.send_modal(modal)
 
     async def delete_message(self, interaction: discord.Interaction, message: discord.Message):
-        message_logs = load_json(MESSAGE_LOGS_FILE, {})
-        log_entry = message_logs.get(str(message.id))
+        message_logs = None if db.is_enabled() else load_json(MESSAGE_LOGS_FILE, {})
+        log_entry = db.get_message_log(str(message.id)) if db.is_enabled() else message_logs.get(str(message.id))
 
         if not log_entry or str(interaction.user.id) != log_entry.get("user_id"):
             await interaction.response.send_message("これはあなたが削除できるメッセージではありません。", ephemeral=True)
@@ -86,15 +85,18 @@ class ChatCog(commands.Cog):
             await webhook.delete_message(message.id)
             await interaction.response.send_message("メッセージを削除しました。", ephemeral=True)
             
-            for i in range(6):
-                log_file = get_log_file_path(datetime.now(timezone.utc) - timedelta(days=i))
-                if os.path.exists(log_file) and str(message.id) in (log_data := load_json(log_file, {})):
-                    del log_data[str(message.id)]
-                    save_json(log_file, log_data)
-                    break
-            
-            del message_logs[str(message.id)]
-            save_json(MESSAGE_LOGS_FILE, message_logs)
+            if db.is_enabled():
+                db.delete_message(str(message.id))
+            else:
+                for i in range(6):
+                    log_file = get_log_file_path(datetime.now(timezone.utc) - timedelta(days=i))
+                    if os.path.exists(log_file) and str(message.id) in (log_data := load_json(log_file, {})):
+                        del log_data[str(message.id)]
+                        save_json(log_file, log_data)
+                        break
+                
+                del message_logs[str(message.id)]
+                save_json(MESSAGE_LOGS_FILE, message_logs)
                 
         except Exception as e:
             await interaction.response.send_message(f"削除中にエラーが発生しました: {e}", ephemeral=True)
