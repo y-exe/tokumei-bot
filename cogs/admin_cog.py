@@ -5,6 +5,7 @@ from discord import app_commands
 import re
 from models.constants import *
 from utils.json_helper import load_json, save_json
+from utils import db
 from core.anonymous_logic import update_button_message, is_authorized
 from ui.views import AnonymousPostView, ReportView
 
@@ -271,10 +272,9 @@ class AdminCog(commands.Cog):
             await interaction.response.send_message("メッセージIDまたはメッセージURLを入力してください。", ephemeral=True)
             return
 
-        message_logs = load_json(MESSAGE_LOGS_FILE, {})
-        log_entry = message_logs.get(message_id)
+        log_entry = db.get_message_log(message_id) if db.is_enabled() else load_json(MESSAGE_LOGS_FILE, {}).get(message_id)
         if not log_entry:
-            await interaction.response.send_message("そのメッセージIDは直近の匿名ログにありません。archive側のログは対象外です。", ephemeral=True)
+            await interaction.response.send_message("そのメッセージIDは匿名ログにありません。", ephemeral=True)
             return
 
         message = await self._fetch_logged_message(interaction, message_id, id)

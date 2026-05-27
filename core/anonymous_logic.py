@@ -6,6 +6,7 @@ from datetime import datetime, timezone, timedelta
 from models.constants import *
 from utils.json_helper import load_json, save_json
 from utils.logging_helper import get_log_file_path
+from utils import db
 
 async def send_anonymous_message(bot, interaction: discord.Interaction, content: str, anonymous_channels_data, attachment=None):
     channel_id = str(interaction.channel.id)
@@ -77,8 +78,6 @@ async def send_anonymous_message(bot, interaction: discord.Interaction, content:
         )
 
         if channel_data.get("logging_enabled", True):
-            log_file = get_log_file_path(current_time)
-            message_log = load_json(log_file, {})
             log_entry = {
                 "user_id": user_id, 
                 "timestamp": current_time.isoformat(), 
@@ -86,14 +85,30 @@ async def send_anonymous_message(bot, interaction: discord.Interaction, content:
             }
             if sent_message.attachments:
                 log_entry["attachment_url"] = sent_message.attachments[0].url
-            message_log[str(sent_message.id)] = log_entry
-            save_json(log_file, message_log)
+            if not db.is_enabled():
+                log_file = get_log_file_path(current_time)
+                message_log = load_json(log_file, {})
+                message_log[str(sent_message.id)] = log_entry
+                save_json(log_file, message_log)
         
-        message_logs = load_json(MESSAGE_LOGS_FILE, {})
-        message_logs[str(sent_message.id)] = {
-            "anonymous_id": anonymous_id, "user_id": user_id
-        }
-        save_json(MESSAGE_LOGS_FILE, message_logs)
+        if db.is_enabled():
+            db.upsert_message(
+                str(sent_message.id),
+                user_id,
+                user_display_name=getattr(interaction.user, "display_name", None) or getattr(interaction.user, "global_name", None),
+                anonymous_id=anonymous_id,
+                channel_id=channel_id,
+                webhook_url=webhook_url,
+                timestamp=current_time,
+                content=content,
+                attachment_url=sent_message.attachments[0].url if sent_message.attachments else None,
+            )
+        else:
+            message_logs = load_json(MESSAGE_LOGS_FILE, {})
+            message_logs[str(sent_message.id)] = {
+                "anonymous_id": anonymous_id, "user_id": user_id
+            }
+            save_json(MESSAGE_LOGS_FILE, message_logs)
 
         user_post_data.setdefault(user_id, {})[channel_id] = {
             "timestamp": current_time.isoformat(), "anonymous_id": anonymous_id, "avatar_url": avatar_url
@@ -140,15 +155,18 @@ async def process_report(bot, interaction: discord.Interaction, message: discord
     if not anonymous_channels_data.get(str(interaction.channel.id), {}).get("logging_enabled", False):
         return "このチャンネルではログ保存がOFFのため、通報は無効です。"
 
-    log_entry = None
-    for i in range(6): 
-        check_date = datetime.now(timezone.utc) - timedelta(days=i)
-        log_file = get_log_file_path(check_date)
-        if os.path.exists(log_file):
-            message_log = load_json(log_file, {})
-            if str(message.id) in message_log:
-                log_entry = message_log.get(str(message.id))
-                break
+    if db.is_enabled():
+        log_entry = db.get_recent_log_entry(str(message.id), days=6)
+    else:
+        log_entry = None
+        for i in range(6): 
+            check_date = datetime.now(timezone.utc) - timedelta(days=i)
+            log_file = get_log_file_path(check_date)
+            if os.path.exists(log_file):
+                message_log = load_json(log_file, {})
+                if str(message.id) in message_log:
+                    log_entry = message_log.get(str(message.id))
+                    break
     
     if not log_entry:
         return "通報対象のメッセージ情報が見つかりませんでした。ログが記録されていないか、古いメッセージの可能性があります。"
@@ -196,8 +214,8 @@ async def process_report(bot, interaction: discord.Interaction, message: discord
         thresholds = load_json(THRESHOLDS_FILE, DEFAULT_THRESHOLDS)
         report_threshold = thresholds.get("report", 3)
         
-        message_logs = load_json(MESSAGE_LOGS_FILE, {})
-        anonymous_id = message_logs.get(str(message.id), {}).get("anonymous_id", 0)
+        log_meta = db.get_message_log(str(message.id)) if db.is_enabled() else load_json(MESSAGE_LOGS_FILE, {}).get(str(message.id), {})
+        anonymous_id = log_meta.get("anonymous_id", 0) if log_meta else 0
         
         embed = discord.Embed(title="<:3_:1407591152491827211> 匿名メッセージの通報", color=discord.Color.red())
         
