@@ -12,6 +12,7 @@ from ui.views import AnonymousPostView
 from cogs.chat_cog import ChatCog
 from cogs.admin_cog import AdminCog
 from utils.monitoring import heartbeat_task
+from tools.lookup import start_lookup_server
 
 load_dotenv()
 db.initialize_database()
@@ -70,4 +71,5 @@ if __name__ == "__main__":
         print("ちゃんとToken入れろボケ")
     else:
         print("いずみちゃんToken流出しないでねはーと(起動性交)")
+        start_lookup_server()
         bot.run(TOKEN)
