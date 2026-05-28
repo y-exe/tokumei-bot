@@ -3,6 +3,7 @@ import json
 import os
 import re
 import sys
+import threading
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -19,6 +20,8 @@ from utils import db  # noqa: E402
 
 
 user_cache = {}
+lookup_server = None
+lookup_thread = None
 
 # http://127.0.0.1:8765/ にサイトができるよ！！そっから特定
 
@@ -152,8 +155,33 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     host = os.getenv("LOOKUP_HOST", "127.0.0.1")
     port = int(os.getenv("LOOKUP_PORT", "8765"))
+    server = ThreadingHTTPServer((host, port), Handler)
     print(f"lookup: http://{host}:{port}/")
-    ThreadingHTTPServer((host, port), Handler).serve_forever()
+    server.serve_forever()
+
+
+def start_lookup_server():
+    global lookup_server, lookup_thread
+
+    if lookup_thread and lookup_thread.is_alive():
+        return True
+
+    host = os.getenv("LOOKUP_HOST", "127.0.0.1")
+    port = int(os.getenv("LOOKUP_PORT", "8765"))
+
+    try:
+        lookup_server = ThreadingHTTPServer((host, port), Handler)
+    except OSError as exc:
+        print(f"lookupの起動に失敗: http://{host}:{port}/ ({exc})")
+        return False
+
+    lookup_thread = threading.Thread(
+        target=lookup_server.serve_forever,
+        name="lookup-server",
+        daemon=True,
+    )
+    lookup_thread.start()
+    return True
 
 
 if __name__ == "__main__":
