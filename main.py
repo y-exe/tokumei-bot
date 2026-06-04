@@ -4,13 +4,13 @@ import os
 from dotenv import load_dotenv
 
 from models.constants import *
-from utils.json_helper import load_json, save_json
+from utils.json import load_json, save_json
 from utils import db
-from utils.logging_helper import archive_old_logs
-from core.anonymous_logic import update_button_message
+from utils.logging import archive_old_logs
+from core.logic import update_button_message
 from ui.views import AnonymousPostView
-from cogs.chat_cog import ChatCog
-from cogs.admin_cog import AdminCog
+from cogs.chat import ChatCog
+from cogs.admin import AdminCog
 from utils.monitoring import heartbeat_task
 from tools.lookup import start_lookup_server
 

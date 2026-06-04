@@ -157,7 +157,7 @@ class ReportView(discord.ui.View):
         if self.user_id is not None:
             return True
         
-        from utils.json_helper import load_json
+        from utils.json import load_json
         from models.constants import REPORTS_FILE
         all_reports = load_json(REPORTS_FILE, {})
         data = all_reports.get(str(interaction.message.id))
