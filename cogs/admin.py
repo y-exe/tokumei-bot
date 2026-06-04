@@ -4,9 +4,9 @@ from discord.ext import commands
 from discord import app_commands
 import re
 from models.constants import *
-from utils.json_helper import load_json, save_json
+from utils.json import load_json, save_json
 from utils import db
-from core.anonymous_logic import update_button_message, is_authorized
+from core.logic import update_button_message, is_authorized
 from ui.views import AnonymousPostView, ReportView
 
 class AdminCog(commands.Cog):

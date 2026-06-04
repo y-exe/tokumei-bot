@@ -2,13 +2,72 @@ import discord
 import os
 import random
 import asyncio
+import re
 from datetime import datetime, timezone, timedelta
 from models.constants import *
-from utils.json_helper import load_json, save_json
-from utils.logging_helper import get_log_file_path
+from utils.json import load_json, save_json
+from utils.logging import get_log_file_path
 from utils import db
 
 _anonymous_send_locks = {}
+_ANONYMOUS_REFERENCE_PATTERN = re.compile(r"(?<!\[)>>([0-9]{1,3})(?![\]\d])")
+
+
+def _build_message_jump_url(guild_id: int | str, channel_id: int | str, message_id: int | str) -> str:
+    return f"https://discord.com/channels/{guild_id}/{channel_id}/{message_id}"
+
+
+async def _find_latest_anonymous_reference(interaction: discord.Interaction, anonymous_id: int):
+    channel_id = str(interaction.channel.id)
+    if db.is_enabled():
+        row = db.get_latest_message_by_anonymous_id(channel_id, anonymous_id)
+        if not row:
+            return None
+        return _build_message_jump_url(interaction.guild.id, row["channel_id"], row["message_id"])
+
+    message_logs = load_json(MESSAGE_LOGS_FILE, {})
+    for message_id, log_entry in reversed(list(message_logs.items())):
+        try:
+            logged_anonymous_id = int(log_entry.get("anonymous_id", 0))
+        except (TypeError, ValueError):
+            continue
+
+        if logged_anonymous_id != anonymous_id:
+            continue
+
+        logged_channel_id = log_entry.get("channel_id")
+        if logged_channel_id and str(logged_channel_id) != channel_id:
+            continue
+
+        try:
+            message = await interaction.channel.fetch_message(int(message_id))
+            return message.jump_url
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException, ValueError):
+            continue
+
+    return None
+
+
+async def _link_manual_anonymous_references(interaction: discord.Interaction, content: str) -> str:
+    matches = list(_ANONYMOUS_REFERENCE_PATTERN.finditer(content or ""))
+    if not matches:
+        return content
+
+    resolved_urls = {}
+    for match in matches:
+        anonymous_id = int(match.group(1))
+        if anonymous_id not in resolved_urls:
+            resolved_urls[anonymous_id] = await _find_latest_anonymous_reference(interaction, anonymous_id)
+
+    def replace_reference(match):
+        anonymous_id = int(match.group(1))
+        url = resolved_urls.get(anonymous_id)
+        if not url:
+            return match.group(0)
+        return f"[>>{anonymous_id}]({url})"
+
+    linked_content = _ANONYMOUS_REFERENCE_PATTERN.sub(replace_reference, content)
+    return linked_content if len(linked_content) <= 2000 else content
 
 async def check_ban(interaction: discord.Interaction):
     user_id_str = str(interaction.user.id)
@@ -112,6 +171,7 @@ async def _send_anonymous_message_locked(bot, interaction: discord.Interaction, 
 
         channel_type = channel_data.get("channel_type", "normal")
         username = "匿名" if channel_type == "request" else f"匿名 {anonymous_id:03d}"
+        content = await _link_manual_anonymous_references(interaction, content)
 
         sent_message = await webhook.send(
             content=content,
@@ -151,7 +211,10 @@ async def _send_anonymous_message_locked(bot, interaction: discord.Interaction, 
         else:
             message_logs = load_json(MESSAGE_LOGS_FILE, {})
             message_logs[str(sent_message.id)] = {
-                "anonymous_id": anonymous_id, "user_id": user_id
+                "anonymous_id": anonymous_id,
+                "user_id": user_id,
+                "channel_id": channel_id,
+                "timestamp": current_time.isoformat()
             }
             save_json(MESSAGE_LOGS_FILE, message_logs)
 

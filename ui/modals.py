@@ -1,8 +1,8 @@
 import discord
 import re
 from models.constants import *
-from utils.json_helper import load_json
-from core.anonymous_logic import send_anonymous_message, update_button_message
+from utils.json import load_json
+from core.logic import send_anonymous_message, update_button_message
 
 class AnonymousPostModal(discord.ui.Modal, title='匿名メッセージを送信'):
     content_input = discord.ui.TextInput(
@@ -109,7 +109,7 @@ class ReportDetailModal(discord.ui.Modal, title='メッセージの通報'):
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        from core.anonymous_logic import process_report
+        from core.logic import process_report
         report_detail = self.detail_input.value
         response_message = await process_report(self.bot, self.original_interaction, self.message, self.anonymous_channels_data, self.report_data, report_detail)
         await interaction.followup.send(response_message, ephemeral=True)
@@ -134,7 +134,7 @@ class DiscordPunishConfirmModal(discord.ui.Modal, title='処罰理由を書き�
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        from core.anonymous_logic import execute_discord_punishment
+        from core.logic import execute_discord_punishment
         success, message = await execute_discord_punishment(
             interaction,
             self.user_id,

@@ -197,6 +197,21 @@ def get_message_log(message_id: str):
     return {"anonymous_id": row["anonymous_id"], "user_id": row["user_id"]}
 
 
+def get_latest_message_by_anonymous_id(channel_id: str, anonymous_id: int):
+    with cursor() as cur:
+        cur.execute(
+            """
+            SELECT message_id, channel_id, anonymous_id, timestamp
+            FROM anonymous_messages
+            WHERE channel_id = %s AND anonymous_id = %s
+            ORDER BY timestamp DESC NULLS LAST, created_at DESC
+            LIMIT 1
+            """,
+            (channel_id, anonymous_id),
+        )
+        return cur.fetchone()
+
+
 def get_recent_log_entry(message_id: str, days: int = 6):
     row = get_message(message_id, within_days=days)
     if not row:

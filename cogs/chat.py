@@ -5,10 +5,10 @@ import os
 import re
 from datetime import datetime, timezone, timedelta
 from models.constants import *
-from utils.json_helper import load_json, save_json
-from utils.logging_helper import get_log_file_path
+from utils.json import load_json, save_json
+from utils.logging import get_log_file_path
 from utils import db
-from core.anonymous_logic import send_anonymous_message, update_button_message, is_authorized
+from core.logic import send_anonymous_message, update_button_message, is_authorized
 from ui.modals import ReplyModal, EditMessageModal
 from ui.views import AnonymousPostView
 
@@ -108,7 +108,7 @@ class ChatCog(commands.Cog):
             await interaction.response.send_message("このチャンネルは匿名チャンネルではありません。", ephemeral=True)
             return
 
-        from core.anonymous_logic import send_anonymous_message
+        from core.logic import send_anonymous_message
 
         if content:
             blocked_keywords = load_json(KEYWORDS_FILE, DEFAULT_KEYWORDS)
@@ -137,7 +137,7 @@ class ChatCog(commands.Cog):
         if channel_id in self.anonymous_channels_data:
             channel_data = self.anonymous_channels_data[channel_id]
             if channel_data.get("channel_type") == "request":
-                from core.anonymous_logic import update_button_message
+                from core.logic import update_button_message
                 from ui.views import AnonymousPostView
                 mode = "request"
                 view_factory = lambda cid, mode=mode: AnonymousPostView(self.bot, cid, self.anonymous_channels_data, self.button_update_locks, mode=mode)

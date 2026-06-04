@@ -1,7 +1,7 @@
 import os
 import re
 from datetime import datetime, timedelta, timezone
-from utils.json_helper import load_json, save_json
+from utils.json import load_json, save_json
 from utils import db
 
 def get_log_file_path(date):
