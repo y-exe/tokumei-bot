@@ -17,6 +17,8 @@ sys.path.insert(0, str(ROOT))
 load_dotenv(ROOT / ".env")
 
 from utils import db  # noqa: E402
+from utils.json import load_json  # noqa: E402
+from models.constants import GUILD_SETTINGS_FILE  # noqa: E402
 
 
 user_cache = {}
@@ -45,17 +47,7 @@ def api_json(path):
 
 
 def guild_ids():
-    try:
-        settings = db.load_json_document("guild_settings.json") or {}
-    except Exception:
-        settings = {}
-
-    if not settings:
-        path = ROOT / "guild_settings.json"
-        if path.exists():
-            with path.open("r", encoding="utf-8") as f:
-                settings = json.load(f)
-
+    settings = load_json(GUILD_SETTINGS_FILE, {})
     return list(settings.keys())
 
 

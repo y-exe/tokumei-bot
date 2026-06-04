@@ -1,13 +1,15 @@
-CHANNELS_FILE = 'channels.json'
-USER_DATA_FILE = 'user_data.json'
-THRESHOLDS_FILE = 'thresholds.json'
-DOMAINS_FILE = 'domains.json'
-KEYWORDS_FILE = 'keywords.json'
-GUILD_SETTINGS_FILE = 'guild_settings.json'
-ANONYMOUS_DATA_FILE = 'anonymous_data.json'
-MESSAGE_LOGS_FILE = 'message_logs.json'
-PUNISHMENT_HISTORY_FILE = 'punishment_history.json'
-REPORTS_FILE = 'reports.json'
+DATA_DIR = 'detas'
+
+CHANNELS_FILE = f'{DATA_DIR}/channels.json'
+USER_DATA_FILE = f'{DATA_DIR}/user_data.json'
+THRESHOLDS_FILE = f'{DATA_DIR}/thresholds.json'
+DOMAINS_FILE = f'{DATA_DIR}/domains.json'
+KEYWORDS_FILE = f'{DATA_DIR}/keywords.json'
+GUILD_SETTINGS_FILE = f'{DATA_DIR}/guild_settings.json'
+ANONYMOUS_DATA_FILE = f'{DATA_DIR}/anonymous_data.json'
+MESSAGE_LOGS_FILE = f'{DATA_DIR}/message_logs.json'
+PUNISHMENT_HISTORY_FILE = f'{DATA_DIR}/punishment_history.json'
+REPORTS_FILE = f'{DATA_DIR}/reports.json'
 
 ALLOWED_ROLE_ID = 1368911481063866449 # 赤鯖運営ロール
 ALLOWED_USER_IDS = [703734573108035715, 1102557945889300480, 962536883219472414, 1438769007636385914, 1457705424022274235] #y_exe本人等
