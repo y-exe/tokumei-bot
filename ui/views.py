@@ -85,7 +85,7 @@ class HelpView(discord.ui.View):
             "**ルール改正や処罰、検閲体制の変更、サ終を検討することもあります。**\n"
             "### <:11:1407591910767464459> 基本フリーですが限度を守ってご利用ください\n"
             "https://github.com/y-exe/tokumei-bot\n"
-            "作成者 <@1438769007636385914>\n\n"
+            "作成者 <@483307286513582090>\n\n"
             "**メッセージは必ずボタンから送信してください!!**"
         )
         embed.set_image(url="https://i.gyazo.com/d383abacd30bc6afda9b94227d2af790.png")
@@ -170,7 +170,6 @@ class ReportView(discord.ui.View):
         self.content = data.get("content")
         self.anonymous_id = data.get("anonymous_id")
         
-        # オリジナルのメッセージオブジェクトを可能な限り復元
         orig_msg_id = data.get("original_message_id")
         orig_chan_id = data.get("original_channel_id")
         if orig_msg_id and orig_chan_id:
@@ -178,7 +177,7 @@ class ReportView(discord.ui.View):
                 channel = interaction.client.get_channel(int(orig_chan_id)) or await interaction.client.fetch_channel(int(orig_chan_id))
                 self.message = await channel.fetch_message(int(orig_msg_id))
             except:
-                self.message = None # メッセージが削除済みなどの場合
+                self.message = None
         return True
 
     @discord.ui.button(label="サーバーBAN", style=discord.ButtonStyle.danger, custom_id="server_ban_button")
