@@ -253,7 +253,11 @@ async def update_button_message(bot, channel: discord.TextChannel, channel_id: s
                     description="<a:2_:1401169059235762208>匿名でメッセージを送信できます\n<a:13:1499325976411111495>**新ルール : 一個人ユーザーが特定できる__悪口・批判が含まれる内容の投稿を禁止__します。(運営、やまかわ本人、サーバー全体に関する批判は可)**\n-# 違反した場合サーバーBANか最大1ヶ月間のタイムアウトが課されます\nルールや詳細な利用方法などはヘルプ・詳細から確認してください",
                     color=discord.Color.dark_theme()
                 )
-            new_msg = await channel.send(embed=embed, view=post_view_class(channel_id, mode=channel_type))
+            new_msg = await channel.send(
+                embed=embed,
+                view=post_view_class(channel_id, mode=channel_type),
+                silent=True,
+            )
             anonymous_channels_data.setdefault(channel_id, {})["button_message_id"] = new_msg.id
             save_json(CHANNELS_FILE, anonymous_channels_data)
         except discord.Forbidden:
