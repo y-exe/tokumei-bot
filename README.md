@@ -7,7 +7,6 @@
 <p align="center">
   <img src="public/about.png" alt="about">
 </p>
-<p align="center"><sub>実際に [やまかわてるき鯖](https://discord.com/invite/Cn7GV9rn7Y) で使われている様子</sub></p>
 
 [![Discord.py](https://img.shields.io/badge/discord.py-v2.x-blue?style=for-the-badge&logo=discord&logoColor=white)](https://discordpy.readthedocs.io/en/latest/)
 [![Python](https://img.shields.io/badge/Python-3.x-yellow?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
