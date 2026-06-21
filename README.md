@@ -1,18 +1,17 @@
 <div align="center">
-
-# 匿名チャットBot
-
-新規参入、活発化のために作られたDiscord上に完全匿名チャットを実装するBot!!<br>
-
+<h1>
+  匿名チャットDiscordBot
+  
+  [![Discord.py](https://img.shields.io/badge/discord.py-v2.x-blue?style=for-the-badge&logo=discord&logoColor=white)](https://discordpy.readthedocs.io/en/latest/)
+  [![Python](https://img.shields.io/badge/Python-3.10-yellow?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/downloads/release/python-3100/)
+  [![License](https://img.shields.io/badge/LICENSE-AGPL3.0license-green.svg?style=for-the-badge)](LICENSE)
+</h1>
 <p align="center">
   <img src="public/about.png" alt="about">
 </p>
-
-[![Discord.py](https://img.shields.io/badge/discord.py-v2.x-blue?style=for-the-badge&logo=discord&logoColor=white)](https://discordpy.readthedocs.io/en/latest/)
-[![Python](https://img.shields.io/badge/Python-3.x-yellow?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
-[![License](https://img.shields.io/badge/LICENSE-MIT-green.svg?style=for-the-badge)](LICENSE)
-
+新規参入、活発化のために作られたDiscord上に完全匿名チャットを実装するBot!!
 </div>
+<br/>
 
 ## なんのためにつくった...?
 
