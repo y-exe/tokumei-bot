@@ -2,16 +2,17 @@
 <h1>
   匿名チャットDiscordBot
   
-  [![Discord.py](https://img.shields.io/badge/discord.py-v2.x-blue?style=flat-square&logo=discord&logoColor=white)](https://discordpy.readthedocs.io/en/latest/)
-  [![Python](https://img.shields.io/badge/Python-3.10-yellow?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/release/python-3100/)
-  [![License](https://img.shields.io/badge/LICENSE-AGPL3.0license-green.svg?style=flat-square)](LICENSE)
+  [![discord.py](https://img.shields.io/badge/discord.py-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discordpy.readthedocs.io/)
+  [![Python 3.10](https://img.shields.io/badge/Python-3.10-yellow?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/release/python-3100/)
+  [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-316192?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+  [![License](https://img.shields.io/badge/LICENSE-AGPL3.0-green.svg?style=flat-square)](LICENSE)
 </h1>
 新規参入、活発化のために作られたDiscord上に完全匿名チャットを実装するBot!!<br>
 <br>
 
 <img src="public/about.png" alt="about">
 <br>
-<sub>実際に使われている様子</sub>
+<sub>匿名チャットの様子</sub>
 </div>
 <br/>
 
