@@ -244,7 +244,7 @@ async def update_button_message(bot, channel: discord.TextChannel, channel_id: s
             if channel_type == "request":
                 embed = discord.Embed(
                     title="<a:1_:1401169042936692776>匿名要望",
-                    description="<a:2_:1401169059235762208>ボタンより匿名で要望・意見を送信できます\n**匿名で出したくない場合は普通にテキストを送信してOKです**\n良識の範囲内でご利用ください",
+                    description="<a:2_:1401169059235762208>ボタンより匿名で要望・意見を送信できます\n**匿名で出したくない場合は普通にテキストを送信してOKです**\n<a:13:1499325976411111495>新ルール：匿名要望を__他ユーザーや要望へのレスバ・反論・反応に使用するのは禁止__とします。\n他要望へ反応する場合は必ず**自分のアカウント**を使用して下さい。\n-# 違反した場合は匿名要望の使用権がなくなります。",
                     color=discord.Color.dark_theme()
                 )
             else:
