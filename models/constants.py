@@ -15,6 +15,7 @@ BANNED_USERS_FILE = f'{DATA_DIR}/banned_users.json'
 ALLOWED_ROLE_ID = 1368911481063866449 # 赤鯖運営ロール
 ALLOWED_USER_IDS = [483307286513582090, 1275438024250888237, 1459535429823893538] #y_exe本人等
 CONTINUOUS_POST_THRESHOLD_MINUTES = 20
+ANONYMOUS_POST_COOLDOWN_SECONDS = 5
 
 DEFAULT_THRESHOLDS = {"report": 3} # 赤鯖は1らしい。とりあえずデフォは3 コマンドでいじってください
 DEFAULT_DOMAINS = ["pornhub.com", "xvideos.com", "dlsite.com"]
@@ -28,7 +29,7 @@ DEFAULT_KEYWORDS = [
     "マリファナ", "ガンジャ", "覚醒剤", "シャブ", "アイス", "コカイン", "MDMA", "LSD",
     "密売", "手押し", "栽培", "爆弾", "爆破", "テロ", "銃", "拳銃", "改造", "詐欺",
     "フィッシング", "リベンジポルノ", "ゴア", "グロ", "闇バイト", "裏バイト", "叩き",
-    "RMT", "垢販売", "アカウント売買", "儲かるS", "稼げる", "副業"
+    "RMT", "垢販売", "アカウント売買", "儲かる", "稼げる", "副業"
 ]
 AVATAR_URLS = [ # discordデフォアイコンのURL
     "https://cdn.discordapp.com/embed/avatars/0.png",

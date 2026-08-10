@@ -1,7 +1,7 @@
 import discord
 import logging
 from models.constants import *
-from core.logic import discord_webhook_from_url, get_content_policy_violation, is_authorized, send_anonymous_message, update_button_message
+from core.logic import AnonymousPostRateLimited, discord_webhook_from_url, get_content_policy_violation, is_authorized, send_anonymous_message, update_button_message
 
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,16 @@ class AnonymousPostModal(discord.ui.Modal, title='匿名メッセージを送信
         mode = channel_data.get("channel_type", "normal")
         view_factory = lambda cid, mode=mode: AnonymousPostView(self.bot, cid, self.anonymous_channels_data, self.button_update_locks, mode=mode)
 
-        if not await send_anonymous_message(self.bot, interaction, self.content_input.value, self.anonymous_channels_data):
+        try:
+            success = await send_anonymous_message(self.bot, interaction, self.content_input.value, self.anonymous_channels_data)
+        except AnonymousPostRateLimited as exc:
+            await interaction.followup.send(
+                f'連続投稿はできません。あと約 {exc.retry_after_seconds} 秒待ってください。',
+                ephemeral=True,
+            )
+            return
+
+        if not success:
             await interaction.followup.send('メッセージの送信中にエラーが発生しました。', ephemeral=True)
         else:
             await update_button_message(self.bot, interaction.channel, str(interaction.channel.id), self.anonymous_channels_data, self.button_update_locks, view_factory)
@@ -66,7 +75,16 @@ class ReplyModal(discord.ui.Modal, title="メッセージに返信"):
         mode = channel_data.get("channel_type", "normal")
         view_factory = lambda cid, mode=mode: AnonymousPostView(self.bot, cid, self.anonymous_channels_data, self.button_update_locks, mode=mode)
 
-        if not await send_anonymous_message(self.bot, interaction, full_content, self.anonymous_channels_data):
+        try:
+            success = await send_anonymous_message(self.bot, interaction, full_content, self.anonymous_channels_data)
+        except AnonymousPostRateLimited as exc:
+            await interaction.followup.send(
+                f'連続投稿はできません。あと約 {exc.retry_after_seconds} 秒待ってください。',
+                ephemeral=True,
+            )
+            return
+
+        if not success:
             await interaction.followup.send('返信の送信中にエラーが発生しました。', ephemeral=True)
         else:
             await update_button_message(self.bot, interaction.channel, str(interaction.channel.id), self.anonymous_channels_data, self.button_update_locks, view_factory)

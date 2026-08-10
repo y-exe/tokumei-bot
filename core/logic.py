@@ -4,7 +4,9 @@ import os
 import random
 import asyncio
 import re
+import time
 import unicodedata
+from collections import OrderedDict
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlsplit
 from models.constants import *
@@ -13,6 +15,8 @@ from utils.logging import get_log_file_path
 from utils import db
 
 _anonymous_send_locks = {}
+_anonymous_send_timestamps = OrderedDict()
+_MAX_RATE_LIMIT_ENTRIES = 10_000
 _ANONYMOUS_REFERENCE_PATTERN = re.compile(r"(?<!\[)>>([0-9]{1,3})(?![\]\d])")
 _MENTION_PATTERN = re.compile(r"<@!?&?[0-9]{17,20}>|@everyone|@here", re.IGNORECASE)
 _DISCORD_WEBHOOK_HOSTS = {
@@ -25,6 +29,29 @@ _DISCORD_WEBHOOK_HOSTS = {
 }
 _DISCORD_WEBHOOK_PATH = re.compile(r"/api(?:/v\d+)?/webhooks/[0-9]{15,22}/[A-Za-z0-9._-]{20,}")
 logger = logging.getLogger(__name__)
+
+
+class AnonymousPostRateLimited(Exception):
+    def __init__(self, retry_after_seconds: int):
+        super().__init__(f"匿名投稿のクールダウン中です: {retry_after_seconds}秒")
+        self.retry_after_seconds = retry_after_seconds
+
+
+def _claim_anonymous_send_slot(channel_id: str, user_id: str, *, now: float | None = None) -> None:
+    """Reserve a per-user, per-channel send slot or raise when it is too soon."""
+    now = time.monotonic() if now is None else now
+    key = (channel_id, user_id)
+    previous = _anonymous_send_timestamps.pop(key, None)
+
+    if previous is not None:
+        remaining = ANONYMOUS_POST_COOLDOWN_SECONDS - (now - previous)
+        if remaining > 0:
+            _anonymous_send_timestamps[key] = previous
+            raise AnonymousPostRateLimited(max(1, int(remaining + 0.999)))
+
+    _anonymous_send_timestamps[key] = now
+    while len(_anonymous_send_timestamps) > _MAX_RATE_LIMIT_ENTRIES:
+        _anonymous_send_timestamps.popitem(last=False)
 
 
 def normalize_content_for_filtering(value: str) -> str:
@@ -211,6 +238,7 @@ async def _send_anonymous_message_locked(bot, interaction: discord.Interaction, 
         return False
 
     user_id = str(interaction.user.id)
+    _claim_anonymous_send_slot(channel_id, user_id)
     current_time = datetime.now(timezone.utc)
     
     user_post_data = load_json(USER_DATA_FILE, {})

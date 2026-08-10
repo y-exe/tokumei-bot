@@ -5,7 +5,10 @@ import threading
 import unittest
 from unittest.mock import patch
 
+import core.logic as logic
 from core.logic import (
+    AnonymousPostRateLimited,
+    _claim_anonymous_send_slot,
     get_content_policy_violation,
     is_valid_discord_webhook_url,
     parse_datetime_utc,
@@ -49,6 +52,29 @@ class WebhookValidationTests(unittest.TestCase):
 
     def test_insecure_webhook_is_rejected(self):
         self.assertFalse(is_valid_discord_webhook_url(self.valid_url.replace("https://", "http://")))
+
+
+class AnonymousPostRateLimitTests(unittest.TestCase):
+    def setUp(self):
+        logic._anonymous_send_timestamps.clear()
+
+    def tearDown(self):
+        logic._anonymous_send_timestamps.clear()
+
+    def test_same_user_and_channel_is_rate_limited(self):
+        with patch.object(logic, "ANONYMOUS_POST_COOLDOWN_SECONDS", 5):
+            _claim_anonymous_send_slot("channel-1", "user-1", now=10)
+            with self.assertRaises(AnonymousPostRateLimited) as caught:
+                _claim_anonymous_send_slot("channel-1", "user-1", now=11)
+
+        self.assertEqual(caught.exception.retry_after_seconds, 4)
+
+    def test_different_user_or_channel_has_an_independent_limit(self):
+        with patch.object(logic, "ANONYMOUS_POST_COOLDOWN_SECONDS", 5):
+            _claim_anonymous_send_slot("channel-1", "user-1", now=10)
+            _claim_anonymous_send_slot("channel-1", "user-2", now=11)
+            _claim_anonymous_send_slot("channel-2", "user-1", now=11)
+            _claim_anonymous_send_slot("channel-1", "user-1", now=15)
 
 
 class DateTimeTests(unittest.TestCase):

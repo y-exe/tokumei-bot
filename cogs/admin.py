@@ -124,8 +124,8 @@ class AdminCog(commands.Cog):
     @app_commands.command(name="domain", description="禁止ドメインを設定（追加・削除）します。")
     @app_commands.describe(action="実行する操作", value="ドメイン")
     @app_commands.choices(action=[
-        app_commands.Choice(name="追加 (add)", value="add"),
-        app_commands.Choice(name="削除 (remove)", value="remove")
+        app_commands.Choice(name="追加", value="add"),
+        app_commands.Choice(name="削除", value="remove")
     ])
     async def domain_manage(self, interaction: discord.Interaction, action: str, value: str):
         if not is_authorized(interaction):
@@ -150,8 +150,8 @@ class AdminCog(commands.Cog):
     @app_commands.command(name="list", description="各種設定・状態の一覧を表示します。")
     @app_commands.describe(category="表示するカテゴリ")
     @app_commands.choices(category=[
-        app_commands.Choice(name="禁止キーワード (word)", value="word"),
-        app_commands.Choice(name="禁止ドメイン (domain)", value="domain")
+        app_commands.Choice(name="禁止キーワード", value="word"),
+        app_commands.Choice(name="禁止ドメイン", value="domain")
     ])
     async def list_commands(self, interaction: discord.Interaction, category: str):
         if not is_authorized(interaction):
@@ -207,7 +207,7 @@ class AdminCog(commands.Cog):
             guild_id = str(interaction.guild.id)
             guild_settings.setdefault(guild_id, {})["punish_log_channel_id"] = str(channel.id)
             save_json(GUILD_SETTINGS_FILE, guild_settings)
-            await interaction.response.send_message(f"処罰ログチャンネルを {channel.mention} に設定しました。", ephemeral=True)
+            await interaction.response.send_message(f"処罰ログを {channel.mention}に設定 ", ephemeral=True)
 
     def _extract_message_id(self, value: str) -> str | None:
         match = re.search(r"(\d{17,20})$", value.strip())
