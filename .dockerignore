@@ -1,8 +1,11 @@
 venv
 __pycache__
 *.pyc
-.env
+.env*
 .git
 .gitignore
 *.bat
-logs/*.log
+detas/
+logs/
+*.json
+**/*.json
