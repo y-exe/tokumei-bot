@@ -28,7 +28,8 @@ def get_content_policy_violation(content: str) -> str | None:
 
     for keyword in load_json(KEYWORDS_FILE, DEFAULT_KEYWORDS):
         if keyword and str(keyword).casefold() in folded_content:
-            return "不適切な可能性のあるキーワードを検出したため、送信をブロックしました。"
+            display_keyword = discord.utils.escape_markdown(str(keyword)).replace("`", "\\`")
+            return f"禁止キーワード `{display_keyword}` を検出したため、送信をブロックしました。"
 
     if _MENTION_PATTERN.search(content):
         return "メンションを含むメッセージは送信できません。"
@@ -39,7 +40,8 @@ def get_content_policy_violation(content: str) -> str | None:
             continue
         pattern = rf"(?<![a-z0-9.-])(?:[a-z0-9-]+\.)*{re.escape(domain)}(?=$|[^a-z0-9.-])"
         if re.search(pattern, folded_content):
-            return "禁止ドメインを含むメッセージは送信できません。"
+            display_domain = discord.utils.escape_markdown(domain).replace("`", "\\`")
+            return f"禁止ドメイン `{display_domain}` を含むメッセージは送信できません。"
 
     return None
 
