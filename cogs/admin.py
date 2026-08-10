@@ -1,13 +1,16 @@
 import discord
-from datetime import datetime
+import logging
 from discord.ext import commands
 from discord import app_commands
 import re
 from models.constants import *
 from utils.json import load_json, save_json
 from utils import db
-from core.logic import update_button_message, is_authorized
+from core.logic import is_valid_discord_webhook_url, parse_datetime_utc, update_button_message, is_authorized
 from ui.views import AnonymousPostView, ReportView
+
+
+logger = logging.getLogger(__name__)
 
 class AdminCog(commands.Cog):
     def __init__(self, bot, anonymous_channels_data, button_update_locks):
@@ -59,6 +62,10 @@ class AdminCog(commands.Cog):
             except discord.Forbidden:
                 await ctx.send("エラー：Webhookを作成する権限がありません。")
                 return
+
+        if not is_valid_discord_webhook_url(webhook.url):
+            await ctx.send("エラー：Discordの正規Webhook URLを確認できませんでした。")
+            return
 
         self.anonymous_channels_data[channel_id] = {
             "webhook_url": webhook.url,
@@ -221,8 +228,13 @@ class AdminCog(commands.Cog):
                 return await channel.fetch_message(int(message_id))
             except (discord.NotFound, discord.Forbidden):
                 continue
-            except Exception as e:
-                print(f"/ban メッセージ取得エラー (channel={channel_id}, message={message_id}): {e}")
+            except (discord.HTTPException, ValueError):
+                logger.warning(
+                    "/ban対象メッセージの取得に失敗しました (channel_id=%s, message_id=%s)",
+                    channel_id,
+                    message_id,
+                    exc_info=True,
+                )
         return None
 
     def _build_punish_embed(self, message: discord.Message, log_entry: dict, anonymous_id: int):
@@ -237,7 +249,7 @@ class AdminCog(commands.Cog):
                 last_at_str = history.get("last_at")
                 if last_at_str:
                     try:
-                        last_at = datetime.fromisoformat(last_at_str)
+                        last_at = parse_datetime_utc(last_at_str)
                         diff = discord.utils.utcnow() - last_at
                         days_text = "本日" if diff.days == 0 else f"{diff.days}日前"
                         embed.description = f"**⚠️ このユーザーは以前匿名つぶやきで {count}回目 最終{days_text}に タイムアウトの処罰をされています。**\n"

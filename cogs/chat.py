@@ -1,4 +1,5 @@
 import discord
+import logging
 from discord.ext import commands
 from discord import app_commands
 import os
@@ -8,9 +9,12 @@ from models.constants import *
 from utils.json import load_json, save_json
 from utils.logging import get_log_file_path
 from utils import db
-from core.logic import get_content_policy_violation, send_anonymous_message, update_button_message, is_authorized
+from core.logic import discord_webhook_from_url, get_content_policy_violation, send_anonymous_message, update_button_message, is_authorized
 from ui.modals import ReplyModal, EditMessageModal
 from ui.views import AnonymousPostView
+
+
+logger = logging.getLogger(__name__)
 
 class ChatCog(commands.Cog):
     def __init__(self, bot, anonymous_channels_data, button_update_locks):
@@ -81,7 +85,7 @@ class ChatCog(commands.Cog):
             return
             
         try:
-            webhook = discord.Webhook.from_url(webhook_url, session=self.bot.http._HTTPClient__session)
+            webhook = discord_webhook_from_url(webhook_url, self.bot)
             await webhook.delete_message(message.id)
             await interaction.response.send_message("メッセージを削除しました。", ephemeral=True)
             
@@ -98,8 +102,9 @@ class ChatCog(commands.Cog):
                 del message_logs[str(message.id)]
                 save_json(MESSAGE_LOGS_FILE, message_logs)
                 
-        except Exception as e:
-            await interaction.response.send_message(f"削除中にエラーが発生しました: {e}", ephemeral=True)
+        except Exception:
+            logger.exception("匿名メッセージの削除に失敗しました (message_id=%s)", message.id)
+            await interaction.response.send_message("削除中にエラーが発生しました。", ephemeral=True)
 
     @app_commands.command(name="image", description="匿名チャンネルに画像を投稿します。")
     @app_commands.describe(attachment="投稿する画像", content="添えるメッセージ（任意）")
@@ -162,8 +167,8 @@ class ChatCog(commands.Cog):
                     await message.author.send(embed=embed)
                 except discord.Forbidden:
                     print(f"メッセージ削除失敗: チャンネル {message.channel.name} で権限がありません。")
-                except Exception as e:
-                    print(f"メッセージ削除中の予期せぬエラー: {e}")
+                except Exception:
+                    logger.exception("通常投稿の自動削除に失敗しました (channel_id=%s)", channel_id)
 
 async def setup(bot, anonymous_channels_data, button_update_locks):
     await bot.add_cog(ChatCog(bot, anonymous_channels_data, button_update_locks))

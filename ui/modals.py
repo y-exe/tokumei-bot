@@ -1,6 +1,10 @@
 import discord
+import logging
 from models.constants import *
-from core.logic import get_content_policy_violation, is_authorized, send_anonymous_message, update_button_message
+from core.logic import discord_webhook_from_url, get_content_policy_violation, is_authorized, send_anonymous_message, update_button_message
+
+
+logger = logging.getLogger(__name__)
 
 class AnonymousPostModal(discord.ui.Modal, title='匿名メッセージを送信'):
     content_input = discord.ui.TextInput(
@@ -85,15 +89,16 @@ class EditMessageModal(discord.ui.Modal, title='メッセージを編集'):
             return
 
         try:
-            webhook = discord.Webhook.from_url(self.webhook_url, session=self.bot.http._HTTPClient__session)
+            webhook = discord_webhook_from_url(self.webhook_url, self.bot)
             await webhook.edit_message(
                 self.message_id,
                 content=self.content_input.value,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
             await interaction.response.send_message("メッセージを編集しました。", ephemeral=True)
-        except Exception as e:
-            await interaction.response.send_message(f"編集中にエラーが発生しました: {e}", ephemeral=True)
+        except Exception:
+            logger.exception("匿名メッセージの編集に失敗しました (message_id=%s)", self.message_id)
+            await interaction.response.send_message("編集中にエラーが発生しました。", ephemeral=True)
 
 class ReportDetailModal(discord.ui.Modal, title='メッセージの通報'):
     detail_input = discord.ui.TextInput(

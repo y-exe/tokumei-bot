@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+import logging
 import os
 from dotenv import load_dotenv
 
@@ -13,6 +14,12 @@ from cogs.chat import ChatCog
 from cogs.admin import AdminCog
 from utils.monitoring import heartbeat_task
 from tools.lookup import start_lookup_server
+
+
+logging.basicConfig(
+    level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 load_dotenv()
 db.initialize_database()

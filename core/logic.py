@@ -1,9 +1,12 @@
 import discord
+import logging
 import os
 import random
 import asyncio
 import re
+import unicodedata
 from datetime import datetime, timezone, timedelta
+from urllib.parse import urlsplit
 from models.constants import *
 from utils.json import load_json, save_json
 from utils.logging import get_log_file_path
@@ -12,10 +15,62 @@ from utils import db
 _anonymous_send_locks = {}
 _ANONYMOUS_REFERENCE_PATTERN = re.compile(r"(?<!\[)>>([0-9]{1,3})(?![\]\d])")
 _MENTION_PATTERN = re.compile(r"<@!?&?[0-9]{17,20}>|@everyone|@here", re.IGNORECASE)
+_DISCORD_WEBHOOK_HOSTS = {
+    "discord.com",
+    "canary.discord.com",
+    "ptb.discord.com",
+    "discordapp.com",
+    "canary.discordapp.com",
+    "ptb.discordapp.com",
+}
+_DISCORD_WEBHOOK_PATH = re.compile(r"/api(?:/v\d+)?/webhooks/[0-9]{15,22}/[A-Za-z0-9._-]{20,}")
+logger = logging.getLogger(__name__)
+
+
+def normalize_content_for_filtering(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value or "")
+    normalized = "".join(
+        char for char in normalized
+        if unicodedata.category(char) not in {"Cf", "Mn", "Me"}
+    )
+    return normalized.casefold()
+
+
+def parse_datetime_utc(value: str) -> datetime:
+    normalized = str(value).strip()
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def is_valid_discord_webhook_url(url: str) -> bool:
+    try:
+        parsed = urlsplit(url)
+        return (
+            parsed.scheme == "https"
+            and parsed.hostname in _DISCORD_WEBHOOK_HOSTS
+            and parsed.username is None
+            and parsed.password is None
+            and parsed.port in (None, 443)
+            and not parsed.query
+            and not parsed.fragment
+            and _DISCORD_WEBHOOK_PATH.fullmatch(parsed.path) is not None
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def discord_webhook_from_url(url: str, bot) -> discord.Webhook:
+    if not is_valid_discord_webhook_url(url):
+        raise ValueError("Discord以外のWebhook URL、または不正なWebhook URLが設定されています。")
+    return discord.Webhook.from_url(url, client=bot)
 
 
 def _normalize_blocked_domain(value: str) -> str:
-    domain = (value or "").strip().casefold()
+    domain = normalize_content_for_filtering(value).strip()
     domain = re.sub(r"^[a-z][a-z0-9+.-]*://", "", domain)
     domain = domain.split("/", 1)[0].split(":", 1)[0].strip(".")
     return domain.removeprefix("www.")
@@ -24,14 +79,14 @@ def _normalize_blocked_domain(value: str) -> str:
 def get_content_policy_violation(content: str) -> str | None:
     """Return a user-facing reason when anonymous content violates a filter."""
     content = content or ""
-    folded_content = content.casefold()
+    folded_content = normalize_content_for_filtering(content)
 
     for keyword in load_json(KEYWORDS_FILE, DEFAULT_KEYWORDS):
-        if keyword and str(keyword).casefold() in folded_content:
+        if keyword and normalize_content_for_filtering(str(keyword)) in folded_content:
             display_keyword = discord.utils.escape_markdown(str(keyword)).replace("`", "\\`")
             return f"禁止キーワード `{display_keyword}` を検出したため、送信をブロックしました。"
 
-    if _MENTION_PATTERN.search(content):
+    if _MENTION_PATTERN.search(folded_content):
         return "メンションを含むメッセージは送信できません。"
 
     for configured_domain in load_json(DOMAINS_FILE, DEFAULT_DOMAINS):
@@ -113,8 +168,8 @@ async def check_ban(interaction: discord.Interaction):
 
     if expires_at_str:
         try:
-            expires_at = datetime.fromisoformat(expires_at_str)
-            if datetime.now() > expires_at:
+            expires_at = parse_datetime_utc(expires_at_str)
+            if datetime.now(timezone.utc) > expires_at:
                 del banned_users[user_id_str]
                 save_json(BANNED_USERS_FILE, banned_users)
                 return False
@@ -181,7 +236,7 @@ async def _send_anonymous_message_locked(bot, interaction: discord.Interaction, 
     last_poster = channel_anon_data.get("last_user_id")
     if user_id in user_post_data and channel_id in user_post_data[user_id] and last_poster == user_id:
         user_channel_data = user_post_data[user_id][channel_id]
-        last_post_time = datetime.fromisoformat(user_channel_data["timestamp"])
+        last_post_time = parse_datetime_utc(user_channel_data["timestamp"])
         if current_time - last_post_time < timedelta(minutes=CONTINUOUS_POST_THRESHOLD_MINUTES):
             should_inherit = True
             anonymous_id = user_channel_data.get("anonymous_id")
@@ -199,7 +254,7 @@ async def _send_anonymous_message_locked(bot, interaction: discord.Interaction, 
 
     try:
         webhook_url = channel_data["webhook_url"]
-        webhook = discord.Webhook.from_url(webhook_url, session=bot.http._HTTPClient__session)
+        webhook = discord_webhook_from_url(webhook_url, bot)
         
         files = []
         if attachment:
@@ -262,8 +317,8 @@ async def _send_anonymous_message_locked(bot, interaction: discord.Interaction, 
         save_json(ANONYMOUS_DATA_FILE, anonymous_data)
         
         return True
-    except Exception as e:
-        print(f"メッセージ送信中にエラー: {e}")
+    except Exception:
+        logger.exception("匿名メッセージの送信に失敗しました (channel_id=%s)", channel_id)
         return False
 
 async def update_button_message(bot, channel: discord.TextChannel, channel_id: str, anonymous_channels_data, button_update_locks, post_view_class):
@@ -355,8 +410,8 @@ async def process_report(bot, interaction: discord.Interaction, message: discord
         if user_id_str:
             try:
                 sender = await bot.fetch_user(int(user_id_str))
-            except Exception as e:
-                print(f"警告: ユーザー({user_id_str})の取得に失敗しました: {e}")
+            except (discord.HTTPException, ValueError):
+                logger.warning("通報対象ユーザーの取得に失敗しました (user_id=%s)", user_id_str, exc_info=True)
 
         step = "Embed作成"
         thresholds = load_json(THRESHOLDS_FILE, DEFAULT_THRESHOLDS)
@@ -374,7 +429,7 @@ async def process_report(bot, interaction: discord.Interaction, message: discord
                 count = history.get("count", 1)
                 last_at_str = history.get("last_at")
                 if last_at_str:
-                    last_at = datetime.fromisoformat(last_at_str)
+                    last_at = parse_datetime_utc(last_at_str)
                     now = discord.utils.utcnow()
                     diff = now - last_at
                     days = diff.days
@@ -446,16 +501,17 @@ async def process_report(bot, interaction: discord.Interaction, message: discord
                 save_json(REPORTS_FILE, all_reports)
                 
                 return "規定数の通報があったため、管理者に通知しました。"
-            except discord.Forbidden as e:
+            except discord.Forbidden:
                 channel_name = getattr(report_channel, "name", "不明")
                 guild_name = getattr(report_channel.guild, "name", "不明") if hasattr(report_channel, "guild") else "不明"
-                return f"エラー: レポートチャンネルへの投稿に失敗しました。\n**送信先**: `{guild_name}` / `#{channel_name}` (ID: `{report_channel.id}`)\n**場所**: `{step}`\n**詳細**: {e}"
+                logger.warning("レポートチャンネルへの投稿権限がありません (channel_id=%s)", report_channel.id, exc_info=True)
+                return f"エラー: レポートチャンネルへの投稿に失敗しました。\n**送信先**: `{guild_name}` / `#{channel_name}` (ID: `{report_channel.id}`)\n**場所**: `{step}`"
         else:
             return f"通報を受け付けました。 (現在 {len(current_report['reporters'])}/{report_threshold} 件)"
 
-    except Exception as e:
-        print(f"通報処理エラー [{step}]: {e}")
-        return f"通報処理中にエラーが発生しました。\n**失敗した手順**: `{step}`\n**エラー**: {e}"
+    except Exception:
+        logger.exception("通報処理に失敗しました (step=%s, message_id=%s)", step, message.id)
+        return f"通報処理中にエラーが発生しました。\n**失敗した手順**: `{step}`"
 
 def is_authorized(obj: discord.Interaction | discord.Message) -> bool:
     user = obj.user if hasattr(obj, 'user') else obj.author
@@ -474,15 +530,17 @@ async def execute_discord_punishment(interaction: discord.Interaction, user_id: 
         user = await interaction.guild.fetch_member(int(user_id))
     except discord.NotFound:
         return False, "ユーザーがサーバー内に見つかりませんでした。"
-    except Exception as e:
-        return False, f"ユーザー取得エラー: {e}"
+    except (discord.HTTPException, ValueError):
+        logger.exception("処罰対象ユーザーの取得に失敗しました (user_id=%s)", user_id)
+        return False, "ユーザー情報の取得に失敗しました。"
 
     if punish_type == "ban":
         try:
             await user.ban(reason=punish_reason)
             punish_text = "サーバーBANを実施しました。"
-        except Exception as e:
-            return False, f"サーバーBANの実行に失敗しました: {e}"
+        except (discord.Forbidden, discord.HTTPException):
+            logger.exception("サーバーBANの実行に失敗しました (user_id=%s)", user_id)
+            return False, "サーバーBANの実行に失敗しました。"
     else:
         try:
             await user.timeout(discord.utils.utcnow() + timedelta(days=27, hours=23, minutes=59), reason=punish_reason)
@@ -497,15 +555,15 @@ async def execute_discord_punishment(interaction: discord.Interaction, user_id: 
             history["last_at"] = discord.utils.utcnow().isoformat()
             punishment_history[user_id] = history
             save_json(PUNISHMENT_HISTORY_FILE, punishment_history)
-        except Exception as e:
-            return False, f"タイムアウトの実行に失敗しました: {e}"
+        except (discord.Forbidden, discord.HTTPException, OSError, TypeError, ValueError):
+            logger.exception("タイムアウトの実行に失敗しました (user_id=%s)", user_id)
+            return False, "タイムアウトの実行に失敗しました。"
 
     if original_report_message:
         try:
             await original_report_message.delete()
-        except Exception as e:
-            print(f"元メッセージ削除失敗: {e}")
-            pass
+        except (discord.Forbidden, discord.HTTPException):
+            logger.warning("処罰対象メッセージの削除に失敗しました", exc_info=True)
 
     guild_settings = load_json(GUILD_SETTINGS_FILE, {})
     guild_id = str(interaction.guild.id)
@@ -529,7 +587,7 @@ async def execute_discord_punishment(interaction: discord.Interaction, user_id: 
                 "(対象メッセージは自動削除されています)"
             )
             await log_channel.send(log_content, allowed_mentions=discord.AllowedMentions.none())
-        except Exception as e:
-            print(f"処罰ログ送信エラー: {e}")
+        except (discord.Forbidden, discord.HTTPException, ValueError):
+            logger.warning("処罰ログの送信に失敗しました (channel_id=%s)", punish_log_channel_id, exc_info=True)
 
     return True, f"処罰（{punish_text}）を実行しました。"
