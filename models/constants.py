@@ -13,12 +13,11 @@ REPORTS_FILE = f'{DATA_DIR}/reports.json'
 BANNED_USERS_FILE = f'{DATA_DIR}/banned_users.json'
 
 ALLOWED_ROLE_ID = 1368911481063866449 # 赤鯖運営ロール
-ALLOWED_USER_IDS = [703734573108035715, 1102557945889300480, 962536883219472414, 1438769007636385914, 1457705424022274235] #y_exe本人等
+ALLOWED_USER_IDS = [483307286513582090, 1275438024250888237, 1459535429823893538] #y_exe本人等
 CONTINUOUS_POST_THRESHOLD_MINUTES = 20
 
 DEFAULT_THRESHOLDS = {"report": 3} # 赤鯖は1らしい。とりあえずデフォは3 コマンドでいじってください
 DEFAULT_DOMAINS = ["pornhub.com", "xvideos.com", "dlsite.com"]
-# う...う..!!!! うおwww ← ????????
 DEFAULT_KEYWORDS = [
     "ロリ", "ショタ", "ペド", "児童ポルノ", "児ポ", "チャイポ", "児童性愛", "児童虐待",
     "障がい", "障害", "ガイジ", "ホモ", "レズ", "オカマ", "黒人",
