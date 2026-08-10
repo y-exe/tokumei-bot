@@ -11,6 +11,37 @@ from utils import db
 
 _anonymous_send_locks = {}
 _ANONYMOUS_REFERENCE_PATTERN = re.compile(r"(?<!\[)>>([0-9]{1,3})(?![\]\d])")
+_MENTION_PATTERN = re.compile(r"<@!?&?[0-9]{17,20}>|@everyone|@here", re.IGNORECASE)
+
+
+def _normalize_blocked_domain(value: str) -> str:
+    domain = (value or "").strip().casefold()
+    domain = re.sub(r"^[a-z][a-z0-9+.-]*://", "", domain)
+    domain = domain.split("/", 1)[0].split(":", 1)[0].strip(".")
+    return domain.removeprefix("www.")
+
+
+def get_content_policy_violation(content: str) -> str | None:
+    """Return a user-facing reason when anonymous content violates a filter."""
+    content = content or ""
+    folded_content = content.casefold()
+
+    for keyword in load_json(KEYWORDS_FILE, DEFAULT_KEYWORDS):
+        if keyword and str(keyword).casefold() in folded_content:
+            return "不適切な可能性のあるキーワードを検出したため、送信をブロックしました。"
+
+    if _MENTION_PATTERN.search(content):
+        return "メンションを含むメッセージは送信できません。"
+
+    for configured_domain in load_json(DOMAINS_FILE, DEFAULT_DOMAINS):
+        domain = _normalize_blocked_domain(str(configured_domain))
+        if not domain:
+            continue
+        pattern = rf"(?<![a-z0-9.-])(?:[a-z0-9-]+\.)*{re.escape(domain)}(?=$|[^a-z0-9.-])"
+        if re.search(pattern, folded_content):
+            return "禁止ドメインを含むメッセージは送信できません。"
+
+    return None
 
 
 def _build_message_jump_url(guild_id: int | str, channel_id: int | str, message_id: int | str) -> str:
@@ -117,6 +148,9 @@ async def _send_anonymous_message_locked(bot, interaction: discord.Interaction, 
     channel_data = anonymous_channels_data.get(channel_id)
     if not channel_data or not channel_data.get("webhook_url"):
         print(f"エラー: チャンネル {channel_id} のWebhook設定が見つかりません。")
+        return False
+
+    if get_content_policy_violation(content):
         return False
 
     user_id = str(interaction.user.id)
@@ -431,6 +465,9 @@ def is_authorized(obj: discord.Interaction | discord.Message) -> bool:
     return False
 
 async def execute_discord_punishment(interaction: discord.Interaction, user_id: str, content: str, original_report_message: discord.Message, punish_type: str, anonymous_id: int, punish_reason: str):
+    if not is_authorized(interaction):
+        return False, "この処罰を実行する権限がありません。"
+
     try:
         user = await interaction.guild.fetch_member(int(user_id))
     except discord.NotFound:

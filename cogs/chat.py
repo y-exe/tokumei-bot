@@ -8,7 +8,7 @@ from models.constants import *
 from utils.json import load_json, save_json
 from utils.logging import get_log_file_path
 from utils import db
-from core.logic import send_anonymous_message, update_button_message, is_authorized
+from core.logic import get_content_policy_violation, send_anonymous_message, update_button_message, is_authorized
 from ui.modals import ReplyModal, EditMessageModal
 from ui.views import AnonymousPostView
 
@@ -110,13 +110,17 @@ class ChatCog(commands.Cog):
 
         from core.logic import send_anonymous_message
 
-        if content:
-            blocked_keywords = load_json(KEYWORDS_FILE, DEFAULT_KEYWORDS)
-            for keyword in blocked_keywords:
-                if keyword.lower() in content.lower():
-                    embed = discord.Embed(title="キーワードブロック", description="不適切な可能性のあるキーワードを検出したため、送信をブロックしました。", color=discord.Color.red())
-                    await interaction.response.send_message(embed=embed, ephemeral=True)
-                    return
+        if violation := get_content_policy_violation(content):
+            embed = discord.Embed(title="投稿ブロック", description=violation, color=discord.Color.red())
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
+        extension = attachment.filename.rsplit(".", 1)[-1].casefold() if "." in attachment.filename else ""
+        content_type = (attachment.content_type or "").casefold()
+        allowed_image_extensions = {"png", "jpg", "jpeg", "webp"}
+        if extension in VIDEO_EXTENSIONS or extension not in allowed_image_extensions or not content_type.startswith("image/"):
+            await interaction.response.send_message("画像ファイル以外は投稿できません。", ephemeral=True)
+            return
 
         await interaction.response.defer(ephemeral=True)
         success = await send_anonymous_message(self.bot, interaction, content, self.anonymous_channels_data, attachment=attachment)

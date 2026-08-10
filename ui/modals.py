@@ -1,8 +1,6 @@
 import discord
-import re
 from models.constants import *
-from utils.json import load_json
-from core.logic import send_anonymous_message, update_button_message
+from core.logic import get_content_policy_violation, is_authorized, send_anonymous_message, update_button_message
 
 class AnonymousPostModal(discord.ui.Modal, title='匿名メッセージを送信'):
     content_input = discord.ui.TextInput(
@@ -19,16 +17,9 @@ class AnonymousPostModal(discord.ui.Modal, title='匿名メッセージを送信
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=False)
 
-        blocked_keywords = load_json(KEYWORDS_FILE, DEFAULT_KEYWORDS)
-        for keyword in blocked_keywords:
-            if keyword.lower() in self.content_input.value.lower():
-                embed = discord.Embed(title="キーワードブロック", description="不適切な可能性のあるキーワードを検出したため、送信をブロックしました。", color=discord.Color.red())
-                await interaction.followup.send(embed=embed, ephemeral=True)
-                return
-
-        mention_pattern = r"<@!?&?[0-9]{17,20}>|@everyone|@here"
-        if re.search(mention_pattern, self.content_input.value):
-            await interaction.followup.send('エラー: メンションを含むメッセージは送信できません。', ephemeral=True)
+        if violation := get_content_policy_violation(self.content_input.value):
+            embed = discord.Embed(title="投稿ブロック", description=violation, color=discord.Color.red())
+            await interaction.followup.send(embed=embed, ephemeral=True)
             return
 
         from ui.views import AnonymousPostView
@@ -57,6 +48,11 @@ class ReplyModal(discord.ui.Modal, title="メッセージに返信"):
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=False)
+
+        if violation := get_content_policy_violation(self.content_input.value):
+            embed = discord.Embed(title="投稿ブロック", description=violation, color=discord.Color.red())
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
         
         reply_prefix = f"[>>{self.target_anonymous_id}]({self.target_message.jump_url})\n"
         full_content = reply_prefix + self.content_input.value
@@ -83,9 +79,18 @@ class EditMessageModal(discord.ui.Modal, title='メッセージを編集'):
         self.message_id = message_id
 
     async def on_submit(self, interaction: discord.Interaction):
+        if violation := get_content_policy_violation(self.content_input.value):
+            embed = discord.Embed(title="投稿ブロック", description=violation, color=discord.Color.red())
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+
         try:
             webhook = discord.Webhook.from_url(self.webhook_url, session=self.bot.http._HTTPClient__session)
-            await webhook.edit_message(self.message_id, content=self.content_input.value)
+            await webhook.edit_message(
+                self.message_id,
+                content=self.content_input.value,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
             await interaction.response.send_message("メッセージを編集しました。", ephemeral=True)
         except Exception as e:
             await interaction.response.send_message(f"編集中にエラーが発生しました: {e}", ephemeral=True)
@@ -133,6 +138,10 @@ class DiscordPunishConfirmModal(discord.ui.Modal, title='処罰理由を書き�
         self.report_embed_message = report_embed_message
 
     async def on_submit(self, interaction: discord.Interaction):
+        if not is_authorized(interaction):
+            await interaction.response.send_message("この処罰を実行する権限がありません。", ephemeral=True)
+            return
+
         await interaction.response.defer(ephemeral=True)
         from core.logic import execute_discord_punishment
         success, message = await execute_discord_punishment(

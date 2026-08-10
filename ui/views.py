@@ -37,8 +37,6 @@ class HelpView(discord.ui.View):
                 "**処罰することがあります** (詳しくは利用規約)\n\n"
                 "**※この際、誰が送信したのかの情報は__運営にもばれません__**\n"
                 "-# 万が一何かあった場合Bot運営者によって開示されます\n\n"
-                "<:11:1407591910767464459> ただ, 5日以上たったメッセージはアーカイブ化します\n"
-                "この場合、通報しても自動削除対応のみの対応となります\n\n"
                 "-# 詳細情報  :  https://github.com/y-exe/tokumei-bot/blob/main/PRIVACY_POLICY.md\n"
                 "-# <:5_:1407591193751195698> また, 本ポリシーは変更される可能性があります"
             )
@@ -151,6 +149,13 @@ class ReportView(discord.ui.View):
         self.content = content
         self.message = message
         self.anonymous_id = anonymous_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        from core.logic import is_authorized
+        if is_authorized(interaction):
+            return True
+        await interaction.response.send_message("この操作を実行する権限がありません。", ephemeral=True)
+        return False
 
     async def _ensure_data(self, interaction: discord.Interaction):
         """再起動などでデータが失われている場合にファイルから復元する"""
