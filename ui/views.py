@@ -143,12 +143,16 @@ class ReportConfirmView(discord.ui.View):
         self.stop()
 
 class ReportView(discord.ui.View):
-    def __init__(self, user_id: str = None, content: str = None, message: discord.Message = None, anonymous_id: int = None):
+    def __init__(self, user_id: str = None, content: str = None, message: discord.Message = None, anonymous_id: int = None, is_request: bool = None):
         super().__init__(timeout=None)
         self.user_id = user_id
         self.content = content
         self.message = message
         self.anonymous_id = anonymous_id
+        self.is_request = is_request
+
+        if is_request is False:
+            self.remove_item(self.revoke_request_access_button)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         from core.logic import is_authorized
@@ -159,7 +163,7 @@ class ReportView(discord.ui.View):
 
     async def _ensure_data(self, interaction: discord.Interaction):
         """再起動などでデータが失われている場合にファイルから復元する"""
-        if self.user_id is not None:
+        if self.user_id is not None and self.is_request is not None:
             return True
         
         from utils.json import load_json
@@ -174,6 +178,7 @@ class ReportView(discord.ui.View):
         self.user_id = data.get("user_id")
         self.content = data.get("content")
         self.anonymous_id = data.get("anonymous_id")
+        self.is_request = data.get("is_request")
         
         orig_msg_id = data.get("original_message_id")
         orig_chan_id = data.get("original_channel_id")
@@ -183,7 +188,37 @@ class ReportView(discord.ui.View):
                 self.message = await channel.fetch_message(int(orig_msg_id))
             except:
                 self.message = None
+
+        if self.is_request is None and orig_chan_id:
+            from models.constants import CHANNELS_FILE
+            channel_data = load_json(CHANNELS_FILE, {}).get(str(orig_chan_id), {})
+            self.is_request = channel_data.get("channel_type") == "request"
         return True
+
+    @discord.ui.button(label="使用権剥奪", style=discord.ButtonStyle.danger, custom_id="request_access_revoke_button")
+    async def revoke_request_access_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._ensure_data(interaction):
+            return
+        if not self.is_request:
+            await interaction.response.send_message("匿名要望の通報に対してのみ実行できます。", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        from core.logic import revoke_anonymous_request_access
+        revoke_anonymous_request_access(
+            self.user_id,
+            banned_by=str(interaction.user.id),
+            guild_id=str(interaction.guild.id),
+            report_message_id=str(interaction.message.id),
+            original_message_id=str(self.message.id) if self.message else None,
+        )
+
+        if interaction.message.embeds:
+            embed = interaction.message.embeds[0]
+            embed.description = (embed.description or "") + "\n**終了済み（匿名要望の使用権剥奪）**"
+            await interaction.message.edit(embed=embed, view=None)
+
+        await interaction.followup.send("対象ユーザーの匿名要望の使用権を永久に剥奪しました。", ephemeral=True)
 
     @discord.ui.button(label="サーバーBAN", style=discord.ButtonStyle.danger, custom_id="server_ban_button")
     async def server_ban_button(self, interaction: discord.Interaction, button: discord.ui.Button):

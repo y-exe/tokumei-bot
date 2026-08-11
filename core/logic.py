@@ -37,6 +37,10 @@ class AnonymousPostRateLimited(Exception):
         self.retry_after_seconds = retry_after_seconds
 
 
+class AnonymousRequestAccessRevoked(Exception):
+    pass
+
+
 def _claim_anonymous_send_slot(channel_id: str, user_id: str, *, now: float | None = None) -> None:
     """Reserve a per-user, per-channel send slot or raise when it is too soon."""
     now = time.monotonic() if now is None else now
@@ -184,42 +188,60 @@ async def _link_manual_anonymous_references(interaction: discord.Interaction, co
     linked_content = _ANONYMOUS_REFERENCE_PATTERN.sub(replace_reference, content)
     return linked_content if len(linked_content) <= 2000 else content
 
-async def check_ban(interaction: discord.Interaction):
-    user_id_str = str(interaction.user.id)
-    banned_users = load_json(BANNED_USERS_FILE, {})
-    if user_id_str not in banned_users:
+async def check_ban(interaction: discord.Interaction, anonymous_channels_data):
+    """Block permanently banned users in anonymous-request channels only."""
+    channel_data = anonymous_channels_data.get(str(interaction.channel.id), {})
+    if channel_data.get("channel_type") != "request":
         return False
 
-    user_ban_info = banned_users[user_id_str]
-    expires_at_str = user_ban_info.get("expires_at")
+    user_id_str = str(interaction.user.id)
+    if db.is_enabled():
+        is_banned = db.is_anonymous_request_banned(user_id_str)
+    else:
+        is_banned = user_id_str in load_json(BANNED_USERS_FILE, {})
 
-    if expires_at_str:
-        try:
-            expires_at = parse_datetime_utc(expires_at_str)
-            if datetime.now(timezone.utc) > expires_at:
-                del banned_users[user_id_str]
-                save_json(BANNED_USERS_FILE, banned_users)
-                return False
-            else:
-                embed = discord.Embed(
-                    title="投稿エラー",
-                    description=f"規定のルール違反により、匿名チャットの利用が制限されています。\n**解除予定時刻**: <t:{int(expires_at.timestamp())}:F>",
-                    color=discord.Color.red()
-                )
-                if interaction.response.is_done():
-                    await interaction.followup.send(embed=embed, ephemeral=True)
-                else:
-                    await interaction.response.send_message(embed=embed, ephemeral=True)
-                return True
-        except ValueError:
-            pass
+    if not is_banned:
+        return False
 
-    embed = discord.Embed(title="投稿エラー", description="ルール違反のため、匿名チャットの利用制限（永久）が課されています。", color=discord.Color.red())
+    embed = discord.Embed(
+        title="投稿エラー",
+        description="ルール違反のため、匿名要望の使用権が永久に剥奪されています。",
+        color=discord.Color.red(),
+    )
     if interaction.response.is_done():
         await interaction.followup.send(embed=embed, ephemeral=True)
     else:
         await interaction.response.send_message(embed=embed, ephemeral=True)
     return True
+
+
+def revoke_anonymous_request_access(
+    user_id: str,
+    *,
+    banned_by: str | None = None,
+    guild_id: str | None = None,
+    report_message_id: str | None = None,
+    original_message_id: str | None = None,
+):
+    if db.is_enabled():
+        db.ban_anonymous_request_user(
+            user_id,
+            banned_by=banned_by,
+            guild_id=guild_id,
+            report_message_id=report_message_id,
+            original_message_id=original_message_id,
+        )
+        return
+
+    banned_users = load_json(BANNED_USERS_FILE, {})
+    banned_users[str(user_id)] = {
+        "banned_at": datetime.now(timezone.utc).isoformat(),
+        "banned_by": str(banned_by) if banned_by is not None else None,
+        "guild_id": str(guild_id) if guild_id is not None else None,
+        "report_message_id": str(report_message_id) if report_message_id is not None else None,
+        "original_message_id": str(original_message_id) if original_message_id is not None else None,
+    }
+    save_json(BANNED_USERS_FILE, banned_users)
 
 async def send_anonymous_message(bot, interaction: discord.Interaction, content: str, anonymous_channels_data, attachment=None):
     channel_id = str(interaction.channel.id)
@@ -233,6 +255,9 @@ async def _send_anonymous_message_locked(bot, interaction: discord.Interaction, 
     if not channel_data or not channel_data.get("webhook_url"):
         print(f"エラー: チャンネル {channel_id} のWebhook設定が見つかりません。")
         return False
+
+    if await check_ban(interaction, anonymous_channels_data):
+        raise AnonymousRequestAccessRevoked
 
     if get_content_policy_violation(content):
         return False
@@ -404,6 +429,7 @@ async def process_report(bot, interaction: discord.Interaction, message: discord
 
     reporter_id = str(interaction.user.id)
     message_id_str = str(message.id)
+    is_anonymous_request = anonymous_channels_data.get(str(message.channel.id), {}).get("channel_type") == "request"
 
     guild_settings = load_json(GUILD_SETTINGS_FILE, {})
     current_report = report_data.setdefault(message_id_str, {"reporters": [], "log_message_id": None})
@@ -494,7 +520,7 @@ async def process_report(bot, interaction: discord.Interaction, message: discord
             try:
                 log_message = await report_channel.fetch_message(current_report["log_message_id"])
                 from ui.views import ReportView
-                await log_message.edit(embed=embed, view=ReportView(log_entry["user_id"], message.content, message, anonymous_id))
+                await log_message.edit(embed=embed, view=ReportView(log_entry["user_id"], message.content, message, anonymous_id, is_request=is_anonymous_request))
                 
                 all_reports = load_json(REPORTS_FILE, {})
                 all_reports[str(log_message.id)] = {
@@ -502,7 +528,8 @@ async def process_report(bot, interaction: discord.Interaction, message: discord
                     "content": message.content,
                     "original_message_id": message.id,
                     "original_channel_id": message.channel.id,
-                    "anonymous_id": anonymous_id
+                    "anonymous_id": anonymous_id,
+                    "is_request": is_anonymous_request
                 }
                 save_json(REPORTS_FILE, all_reports)
                 
@@ -515,7 +542,7 @@ async def process_report(bot, interaction: discord.Interaction, message: discord
             step = "新規メッセージ送信"
             try:
                 from ui.views import ReportView
-                sent_message = await report_channel.send(embed=embed, view=ReportView(log_entry["user_id"], message.content, message, anonymous_id))
+                sent_message = await report_channel.send(embed=embed, view=ReportView(log_entry["user_id"], message.content, message, anonymous_id, is_request=is_anonymous_request))
                 current_report["log_message_id"] = sent_message.id
                 
                 all_reports = load_json(REPORTS_FILE, {})
@@ -524,7 +551,8 @@ async def process_report(bot, interaction: discord.Interaction, message: discord
                     "content": message.content,
                     "original_message_id": message.id,
                     "original_channel_id": message.channel.id,
-                    "anonymous_id": anonymous_id
+                    "anonymous_id": anonymous_id,
+                    "is_request": is_anonymous_request
                 }
                 save_json(REPORTS_FILE, all_reports)
                 

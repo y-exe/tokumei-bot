@@ -3,15 +3,18 @@ import os
 import tempfile
 import threading
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import core.logic as logic
 from core.logic import (
     AnonymousPostRateLimited,
     _claim_anonymous_send_slot,
+    check_ban,
     get_content_policy_violation,
     is_valid_discord_webhook_url,
     parse_datetime_utc,
+    revoke_anonymous_request_access,
 )
 from utils.json import load_json, save_json
 
@@ -75,6 +78,76 @@ class AnonymousPostRateLimitTests(unittest.TestCase):
             _claim_anonymous_send_slot("channel-1", "user-2", now=11)
             _claim_anonymous_send_slot("channel-2", "user-1", now=11)
             _claim_anonymous_send_slot("channel-1", "user-1", now=15)
+
+
+class AnonymousRequestBanTests(unittest.IsolatedAsyncioTestCase):
+    def test_revoke_is_persisted_to_database_with_audit_metadata(self):
+        with (
+            patch("core.logic.db.is_enabled", return_value=True),
+            patch("core.logic.db.ban_anonymous_request_user") as persist,
+        ):
+            revoke_anonymous_request_access(
+                "20",
+                banned_by="30",
+                guild_id="40",
+                report_message_id="50",
+                original_message_id="60",
+            )
+
+        persist.assert_called_once_with(
+            "20",
+            banned_by="30",
+            guild_id="40",
+            report_message_id="50",
+            original_message_id="60",
+        )
+
+    async def test_normal_anonymous_channel_does_not_check_ban_database(self):
+        interaction = SimpleNamespace(
+            channel=SimpleNamespace(id=10),
+            user=SimpleNamespace(id=20),
+        )
+
+        with patch("core.logic.db.is_enabled") as is_enabled:
+            self.assertFalse(await check_ban(interaction, {"10": {"channel_type": "normal"}}))
+
+        is_enabled.assert_not_called()
+
+    async def test_banned_user_is_blocked_in_anonymous_request_channel(self):
+        sent_messages = []
+
+        class Response:
+            @staticmethod
+            def is_done():
+                return False
+
+            async def send_message(self, **kwargs):
+                sent_messages.append(kwargs)
+
+        interaction = SimpleNamespace(
+            channel=SimpleNamespace(id=10),
+            user=SimpleNamespace(id=20),
+            response=Response(),
+        )
+
+        with (
+            patch("core.logic.db.is_enabled", return_value=True),
+            patch("core.logic.db.is_anonymous_request_banned", return_value=True) as is_banned,
+        ):
+            self.assertTrue(await check_ban(interaction, {"10": {"channel_type": "request"}}))
+
+        is_banned.assert_called_once_with("20")
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("匿名要望", sent_messages[0]["embed"].description)
+
+    async def test_request_report_revoke_button_is_first_and_request_only(self):
+        from ui.views import ReportView
+
+        request_ids = [item.custom_id for item in ReportView(is_request=True).children]
+        normal_ids = [item.custom_id for item in ReportView(is_request=False).children]
+
+        self.assertEqual(request_ids[0], "request_access_revoke_button")
+        self.assertNotIn("request_access_revoke_button", normal_ids)
 
 
 class DateTimeTests(unittest.TestCase):

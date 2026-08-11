@@ -9,7 +9,7 @@ from models.constants import *
 from utils.json import load_json, save_json
 from utils.logging import get_log_file_path
 from utils import db
-from core.logic import AnonymousPostRateLimited, discord_webhook_from_url, get_content_policy_violation, send_anonymous_message, update_button_message, is_authorized
+from core.logic import AnonymousPostRateLimited, AnonymousRequestAccessRevoked, discord_webhook_from_url, get_content_policy_violation, send_anonymous_message, update_button_message, is_authorized
 from ui.modals import ReplyModal, EditMessageModal
 from ui.views import AnonymousPostView
 
@@ -130,6 +130,8 @@ class ChatCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         try:
             success = await send_anonymous_message(self.bot, interaction, content, self.anonymous_channels_data, attachment=attachment)
+        except AnonymousRequestAccessRevoked:
+            return
         except AnonymousPostRateLimited as exc:
             await interaction.followup.send(
                 f"連続投稿はできません。あと約 {exc.retry_after_seconds} 秒待ってください。",

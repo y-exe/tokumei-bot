@@ -1,7 +1,7 @@
 import discord
 import logging
 from models.constants import *
-from core.logic import AnonymousPostRateLimited, discord_webhook_from_url, get_content_policy_violation, is_authorized, send_anonymous_message, update_button_message
+from core.logic import AnonymousPostRateLimited, AnonymousRequestAccessRevoked, discord_webhook_from_url, get_content_policy_violation, is_authorized, send_anonymous_message, update_button_message
 
 
 logger = logging.getLogger(__name__)
@@ -33,6 +33,8 @@ class AnonymousPostModal(discord.ui.Modal, title='匿名メッセージを送信
 
         try:
             success = await send_anonymous_message(self.bot, interaction, self.content_input.value, self.anonymous_channels_data)
+        except AnonymousRequestAccessRevoked:
+            return
         except AnonymousPostRateLimited as exc:
             await interaction.followup.send(
                 f'連続投稿はできません。あと約 {exc.retry_after_seconds} 秒待ってください。',
@@ -77,6 +79,8 @@ class ReplyModal(discord.ui.Modal, title="メッセージに返信"):
 
         try:
             success = await send_anonymous_message(self.bot, interaction, full_content, self.anonymous_channels_data)
+        except AnonymousRequestAccessRevoked:
+            return
         except AnonymousPostRateLimited as exc:
             await interaction.followup.send(
                 f'連続投稿はできません。あと約 {exc.retry_after_seconds} 秒待ってください。',

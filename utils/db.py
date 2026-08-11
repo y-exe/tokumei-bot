@@ -106,6 +106,18 @@ def initialize_database():
             )
             """
         )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS anonymous_request_bans (
+                user_id text PRIMARY KEY,
+                banned_at timestamptz NOT NULL DEFAULT now(),
+                banned_by text,
+                guild_id text,
+                report_message_id text,
+                original_message_id text
+            )
+            """
+        )
         cur.execute("ALTER TABLE anonymous_messages ADD COLUMN IF NOT EXISTS user_display_name text")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_anonymous_messages_timestamp ON anonymous_messages (timestamp DESC)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_anonymous_messages_user_timestamp ON anonymous_messages (user_id, timestamp DESC)")
@@ -232,3 +244,45 @@ def get_recent_log_entry(message_id: str, days: int = 6):
 def delete_message(message_id: str):
     with cursor() as cur:
         cur.execute("DELETE FROM anonymous_messages WHERE message_id = %s", (message_id,))
+
+
+def is_anonymous_request_banned(user_id: str) -> bool:
+    with cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM anonymous_request_bans WHERE user_id = %s",
+            (str(user_id),),
+        )
+        return cur.fetchone() is not None
+
+
+def ban_anonymous_request_user(
+    user_id: str,
+    *,
+    banned_by: str | None = None,
+    guild_id: str | None = None,
+    report_message_id: str | None = None,
+    original_message_id: str | None = None,
+):
+    with cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO anonymous_request_bans (
+                user_id, banned_by, guild_id, report_message_id, original_message_id
+            )
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (user_id)
+            DO UPDATE SET
+                banned_at = now(),
+                banned_by = EXCLUDED.banned_by,
+                guild_id = EXCLUDED.guild_id,
+                report_message_id = EXCLUDED.report_message_id,
+                original_message_id = EXCLUDED.original_message_id
+            """,
+            (
+                str(user_id),
+                str(banned_by) if banned_by is not None else None,
+                str(guild_id) if guild_id is not None else None,
+                str(report_message_id) if report_message_id is not None else None,
+                str(original_message_id) if original_message_id is not None else None,
+            ),
+        )

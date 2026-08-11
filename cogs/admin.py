@@ -296,7 +296,7 @@ class AdminCog(commands.Cog):
 
         anonymous_id = log_entry.get("anonymous_id", 0)
         embed = self._build_punish_embed(message, log_entry, anonymous_id)
-        view = ReportView(log_entry["user_id"], message.content, message, anonymous_id)
+        view = ReportView(log_entry["user_id"], message.content, message, anonymous_id, is_request=False)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 async def setup(bot, anonymous_channels_data, button_update_locks):
