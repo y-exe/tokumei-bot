@@ -77,7 +77,7 @@ class HelpView(discord.ui.View):
         embed.description = (
             "<:10:1407591891318472794> **このBotはWebhookを使い匿名チャットを再現するものです**\n"
             "匿名の性質上荒れることが多いため,\n"
-            "`動画のブロック` `画像のNSFW・グロ検知` `キーワード、ドメインブロック`\nを導入しています。\n"
+            "`20MBを超える添付の制限` `キーワード、ドメインブロック`\nを導入しています。\n"
             "またログが`ON`になっているチャンネルでは**通報機能**を実装しています。\n\n"
             "<:3_:1407591152491827211> また, 荒れすぎた場合\n"
             "**ルール改正や処罰、検閲体制の変更、サ終を検討することもあります。**\n"
@@ -108,7 +108,7 @@ class AnonymousPostView(discord.ui.View):
     async def image_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         image_id = getattr(self.bot, "image_command_id", "1488490168854908979")
         mention = f"</image:{image_id}>"
-        description_text = f"## 下のボタンを押して画像を挿入してください\n{' '.join([mention] * 24)}"
+        description_text = f"## 下のボタンを押してファイルを挿入してください\n{' '.join([mention] * 24)}"
         
         embed = discord.Embed(description=description_text, color=discord.Color.blue())
         await interaction.response.send_message(embed=embed, ephemeral=True)

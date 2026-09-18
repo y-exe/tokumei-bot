@@ -41,6 +41,10 @@ class AnonymousRequestAccessRevoked(Exception):
     pass
 
 
+class AnonymousUploadTooLarge(Exception):
+    pass
+
+
 def _claim_anonymous_send_slot(channel_id: str, user_id: str, *, now: float | None = None) -> None:
     """Reserve a per-user, per-channel send slot or raise when it is too soon."""
     now = time.monotonic() if now is None else now
@@ -130,6 +134,45 @@ def get_content_policy_violation(content: str) -> str | None:
             return f"禁止ドメイン `{display_domain}` を含むメッセージは送信できません。"
 
     return None
+
+
+def _format_copyable_code_block(content: str, max_length: int = 1000) -> str:
+    content = content or "(空のメッセージ)"
+    clipped = content[:max_length]
+    if len(content) > max_length:
+        clipped += "\n..."
+    clipped = clipped.replace("```", "`\u200b``")
+    return f"```\n{clipped}\n```"
+
+
+def build_content_policy_violation_embed(content: str) -> discord.Embed:
+    violation = get_content_policy_violation(content) or "送信できない内容が含まれているため、送信をブロックしました。"
+    embed = discord.Embed(title="投稿ブロック", description=violation, color=discord.Color.red())
+    embed.add_field(
+        name="送信しようとしたメッセージ",
+        value=_format_copyable_code_block(content),
+        inline=False,
+    )
+    return embed
+
+
+def is_discord_upload_too_large_error(exc: discord.HTTPException) -> bool:
+    text = " ".join(
+        str(value)
+        for value in (
+            getattr(exc, "text", None),
+            getattr(exc, "response", None),
+            exc,
+        )
+        if value is not None
+    ).casefold()
+    return (
+        getattr(exc, "status", None) == 413
+        or "request entity too large" in text
+        or "file is too large" in text
+        or "filesize" in text
+        or "payload too large" in text
+    )
 
 
 def _build_message_jump_url(guild_id: int | str, channel_id: int | str, message_id: int | str) -> str:
@@ -243,13 +286,13 @@ def revoke_anonymous_request_access(
     }
     save_json(BANNED_USERS_FILE, banned_users)
 
-async def send_anonymous_message(bot, interaction: discord.Interaction, content: str, anonymous_channels_data, attachment=None):
+async def send_anonymous_message(bot, interaction: discord.Interaction, content: str, anonymous_channels_data, attachment=None, attachment_file=None):
     channel_id = str(interaction.channel.id)
     lock = _anonymous_send_locks.setdefault(channel_id, asyncio.Lock())
     async with lock:
-        return await _send_anonymous_message_locked(bot, interaction, content, anonymous_channels_data, attachment)
+        return await _send_anonymous_message_locked(bot, interaction, content, anonymous_channels_data, attachment, attachment_file)
 
-async def _send_anonymous_message_locked(bot, interaction: discord.Interaction, content: str, anonymous_channels_data, attachment=None):
+async def _send_anonymous_message_locked(bot, interaction: discord.Interaction, content: str, anonymous_channels_data, attachment=None, attachment_file=None):
     channel_id = str(interaction.channel.id)
     channel_data = anonymous_channels_data.get(channel_id)
     if not channel_data or not channel_data.get("webhook_url"):
@@ -310,7 +353,9 @@ async def _send_anonymous_message_locked(bot, interaction: discord.Interaction, 
         webhook = discord_webhook_from_url(webhook_url, bot)
         
         files = []
-        if attachment:
+        if attachment_file:
+            files.append(attachment_file)
+        elif attachment:
             files.append(await attachment.to_file())
 
         channel_type = channel_data.get("channel_type", "normal")
@@ -370,6 +415,11 @@ async def _send_anonymous_message_locked(bot, interaction: discord.Interaction, 
         save_json(ANONYMOUS_DATA_FILE, anonymous_data)
         
         return True
+    except discord.HTTPException as exc:
+        if is_discord_upload_too_large_error(exc):
+            raise AnonymousUploadTooLarge from exc
+        logger.exception("匿名メッセージの送信に失敗しました (channel_id=%s)", channel_id)
+        return False
     except Exception:
         logger.exception("匿名メッセージの送信に失敗しました (channel_id=%s)", channel_id)
         return False
@@ -388,7 +438,7 @@ async def update_button_message(bot, channel: discord.TextChannel, channel_id: s
             if channel_type == "request":
                 embed = discord.Embed(
                     title="<a:1_:1401169042936692776>匿名要望",
-                    description="<a:2_:1401169059235762208>ボタンより匿名で要望・意見を送信できます\n<a:13:1499325976411111495>**新ルール：匿名要望を__他ユーザーによる要望への反論・反応に使用するのは禁止__とします。**\n他要望へ反応する場合は必ず**自分のアカウント**を使用して下さい。\n-# 違反した場合は匿名要望の使用権がなくなります。",
+                    description="<a:2_:1401169059235762208>ボタンより匿名で要望・意見を送信できます\n<a:13:1499325976411111495>**新ルール：匿名要望を__他ユーザーによる要望への反論・レスバに使用するのは禁止__とします。**\n他要望へ反応する場合は必ず**自分のアカウント**を使用して下さい。\n-# 違反した場合は匿名要望の使用権がなくなります。",
                     color=discord.Color.dark_theme()
                 )
             else:

@@ -1,7 +1,7 @@
 import discord
 import logging
 from models.constants import *
-from core.logic import AnonymousPostRateLimited, AnonymousRequestAccessRevoked, discord_webhook_from_url, get_content_policy_violation, is_authorized, send_anonymous_message, update_button_message
+from core.logic import AnonymousPostRateLimited, AnonymousRequestAccessRevoked, build_content_policy_violation_embed, discord_webhook_from_url, get_content_policy_violation, is_authorized, send_anonymous_message, update_button_message
 
 
 logger = logging.getLogger(__name__)
@@ -22,8 +22,7 @@ class AnonymousPostModal(discord.ui.Modal, title='匿名メッセージを送信
         await interaction.response.defer(ephemeral=True, thinking=False)
 
         if violation := get_content_policy_violation(self.content_input.value):
-            embed = discord.Embed(title="投稿ブロック", description=violation, color=discord.Color.red())
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=build_content_policy_violation_embed(self.content_input.value), ephemeral=True)
             return
 
         from ui.views import AnonymousPostView
@@ -65,8 +64,7 @@ class ReplyModal(discord.ui.Modal, title="メッセージに返信"):
         await interaction.response.defer(ephemeral=True, thinking=False)
 
         if violation := get_content_policy_violation(self.content_input.value):
-            embed = discord.Embed(title="投稿ブロック", description=violation, color=discord.Color.red())
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=build_content_policy_violation_embed(self.content_input.value), ephemeral=True)
             return
         
         reply_prefix = f"[>>{self.target_anonymous_id}]({self.target_message.jump_url})\n"
@@ -106,8 +104,7 @@ class EditMessageModal(discord.ui.Modal, title='メッセージを編集'):
 
     async def on_submit(self, interaction: discord.Interaction):
         if violation := get_content_policy_violation(self.content_input.value):
-            embed = discord.Embed(title="投稿ブロック", description=violation, color=discord.Color.red())
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message(embed=build_content_policy_violation_embed(self.content_input.value), ephemeral=True)
             return
 
         try:

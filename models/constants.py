@@ -16,6 +16,8 @@ ALLOWED_ROLE_ID = 1368911481063866449 # 赤鯖運営ロール
 ALLOWED_USER_IDS = [483307286513582090, 1275438024250888237, 1459535429823893538] #y_exe本人等
 CONTINUOUS_POST_THRESHOLD_MINUTES = 20
 ANONYMOUS_POST_COOLDOWN_SECONDS = 5
+MAX_DISCORD_ATTACHMENT_SIZE_BYTES = 20 * 1024 * 1024
+COMPRESSIBLE_ATTACHMENT_SIZE_BYTES = 120 * 1024 * 1024
 
 DEFAULT_THRESHOLDS = {"report": 3} # 赤鯖は1らしい。とりあえずデフォは3 コマンドでいじってください
 DEFAULT_DOMAINS = ["pornhub.com", "xvideos.com", "dlsite.com"]
@@ -40,3 +42,4 @@ AVATAR_URLS = [ # discordデフォアイコンのURL
     "https://cdn.discordapp.com/embed/avatars/5.png"
 ]
 VIDEO_EXTENSIONS = ['mp4', 'mov', 'webm', 'avi', 'mkv', 'flv', 'gif']
+COMPRESSIBLE_VIDEO_EXTENSIONS = ['mp4', 'mov', 'webm', 'avi', 'mkv', 'flv', 'gif']

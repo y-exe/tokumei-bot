@@ -2,19 +2,184 @@ import discord
 import logging
 from discord.ext import commands
 from discord import app_commands
+import asyncio
 import os
 import re
+import shutil
+import tempfile
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from models.constants import *
 from utils.json import load_json, save_json
 from utils.logging import get_log_file_path
 from utils import db
-from core.logic import AnonymousPostRateLimited, AnonymousRequestAccessRevoked, discord_webhook_from_url, get_content_policy_violation, send_anonymous_message, update_button_message, is_authorized
+from core.logic import AnonymousPostRateLimited, AnonymousRequestAccessRevoked, AnonymousUploadTooLarge, build_content_policy_violation_embed, discord_webhook_from_url, get_content_policy_violation, send_anonymous_message, update_button_message, is_authorized
 from ui.modals import ReplyModal, EditMessageModal
 from ui.views import AnonymousPostView
 
 
 logger = logging.getLogger(__name__)
+
+
+def _attachment_extension(attachment: discord.Attachment) -> str:
+    return attachment.filename.rsplit(".", 1)[-1].casefold() if "." in attachment.filename else ""
+
+
+def _can_offer_compression(attachment: discord.Attachment) -> bool:
+    size = attachment.size or 0
+    return (
+        _attachment_extension(attachment) in COMPRESSIBLE_VIDEO_EXTENSIONS
+        and MAX_DISCORD_ATTACHMENT_SIZE_BYTES < size <= COMPRESSIBLE_ATTACHMENT_SIZE_BYTES
+    )
+
+
+def _upload_too_large_message(can_compress: bool) -> str:
+    message = "Discordに送信できるファイルは20MBまでです。20MB以下のファイルでもう一度やり直してください。"
+    if can_compress:
+        message += "\nこの動画は自動圧縮できる可能性があります。下のボタンから20MB未満に圧縮して再送信できます。"
+    return message
+
+
+async def _probe_video_duration(ffprobe_path: str, input_path: str) -> float | None:
+    process = await asyncio.create_subprocess_exec(
+        ffprobe_path,
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        input_path,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, _ = await process.communicate()
+    if process.returncode != 0:
+        return None
+    try:
+        duration = float(stdout.decode("utf-8", errors="ignore").strip())
+    except ValueError:
+        return None
+    return duration if duration > 0 else None
+
+
+async def _compress_video_under_limit(attachment: discord.Attachment, directory: str) -> Path:
+    ffmpeg_path = shutil.which("ffmpeg")
+    if not ffmpeg_path:
+        raise RuntimeError("ffmpegが見つからないため、自動圧縮できません。")
+
+    input_path = Path(directory) / Path(attachment.filename).name
+    output_path = input_path.with_name(f"{input_path.stem}-compressed.mp4")
+    await attachment.save(input_path)
+
+    ffprobe_path = shutil.which("ffprobe")
+    duration = await _probe_video_duration(ffprobe_path, str(input_path)) if ffprobe_path else None
+
+    command = [
+        ffmpeg_path,
+        "-y",
+        "-i",
+        str(input_path),
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a?",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "96k",
+        "-movflags",
+        "+faststart",
+    ]
+    if duration:
+        target_bits = int(MAX_DISCORD_ATTACHMENT_SIZE_BYTES * 8 * 0.92)
+        video_bitrate = max(120_000, int(target_bits / duration) - 96_000)
+        command.extend(["-b:v", str(video_bitrate), "-maxrate", str(video_bitrate), "-bufsize", str(video_bitrate * 2)])
+    else:
+        command.extend(["-crf", "32"])
+    command.append(str(output_path))
+
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _, stderr = await process.communicate()
+    if process.returncode != 0:
+        logger.warning(
+            "ffmpegによる動画圧縮に失敗しました (filename=%s, stderr=%s)",
+            attachment.filename,
+            stderr.decode("utf-8", errors="ignore")[-500:],
+        )
+        raise RuntimeError("動画の圧縮に失敗しました。別のファイルでやり直してください。")
+    if output_path.stat().st_size > MAX_DISCORD_ATTACHMENT_SIZE_BYTES:
+        raise RuntimeError("圧縮後も20MBを超えたため、自動再送信できませんでした。")
+    return output_path
+
+
+class CompressAndResendView(discord.ui.View):
+    def __init__(self, cog: "ChatCog", owner_id: int, attachment: discord.Attachment, content: str):
+        super().__init__(timeout=300)
+        self.cog = cog
+        self.owner_id = owner_id
+        self.attachment = attachment
+        self.content = content
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("このボタンは投稿した本人だけが使用できます。", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="20MB未満に圧縮して再送信", style=discord.ButtonStyle.primary)
+    async def compress_and_resend(self, interaction: discord.Interaction, button: discord.ui.Button):
+        button.disabled = True
+        await interaction.response.edit_message(view=self)
+        await interaction.followup.send("動画を圧縮しています。少し待ってください。", ephemeral=True)
+
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                compressed_path = await _compress_video_under_limit(self.attachment, directory)
+                with compressed_path.open("rb") as handle:
+                    file = discord.File(handle, filename=compressed_path.name)
+                    success = await send_anonymous_message(
+                        self.cog.bot,
+                        interaction,
+                        self.content,
+                        self.cog.anonymous_channels_data,
+                        attachment_file=file,
+                    )
+        except AnonymousRequestAccessRevoked:
+            return
+        except AnonymousPostRateLimited as exc:
+            await interaction.followup.send(
+                f"連続投稿はできません。あと約 {exc.retry_after_seconds} 秒待ってください。",
+                ephemeral=True,
+            )
+            return
+        except AnonymousUploadTooLarge:
+            await interaction.followup.send("圧縮後も20MBを超えたため、Discordに送信できませんでした。", ephemeral=True)
+            return
+        except Exception as exc:
+            logger.exception("添付ファイルの自動圧縮に失敗しました (filename=%s)", self.attachment.filename)
+            await interaction.followup.send(str(exc) or "自動圧縮に失敗しました。", ephemeral=True)
+            return
+
+        if success:
+            channel_data = self.cog.anonymous_channels_data.get(str(interaction.channel.id), {})
+            mode = channel_data.get("channel_type", "normal")
+            view_factory = lambda cid, mode=mode: AnonymousPostView(self.cog.bot, cid, self.cog.anonymous_channels_data, self.cog.button_update_locks, mode=mode)
+            await update_button_message(self.cog.bot, interaction.channel, str(interaction.channel.id), self.cog.anonymous_channels_data, self.cog.button_update_locks, view_factory)
+            await interaction.followup.send("圧縮して投稿しました。", ephemeral=True)
+        else:
+            await interaction.followup.send("圧縮後の投稿に失敗しました。", ephemeral=True)
+
 
 class ChatCog(commands.Cog):
     def __init__(self, bot, anonymous_channels_data, button_update_locks):
@@ -106,8 +271,8 @@ class ChatCog(commands.Cog):
             logger.exception("匿名メッセージの削除に失敗しました (message_id=%s)", message.id)
             await interaction.response.send_message("削除中にエラーが発生しました。", ephemeral=True)
 
-    @app_commands.command(name="image", description="匿名チャンネルに画像を投稿します。")
-    @app_commands.describe(attachment="投稿する画像", content="添えるメッセージ（任意）")
+    @app_commands.command(name="image", description="匿名チャンネルにファイルを投稿します。")
+    @app_commands.describe(attachment="投稿するファイル", content="添えるメッセージ（任意）")
     async def post_image(self, interaction: discord.Interaction, attachment: discord.Attachment, content: str = ""):
         if str(interaction.channel.id) not in self.anonymous_channels_data:
             await interaction.response.send_message("このチャンネルは匿名チャンネルではありません。", ephemeral=True)
@@ -116,15 +281,13 @@ class ChatCog(commands.Cog):
         from core.logic import send_anonymous_message
 
         if violation := get_content_policy_violation(content):
-            embed = discord.Embed(title="投稿ブロック", description=violation, color=discord.Color.red())
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+            await interaction.response.send_message(embed=build_content_policy_violation_embed(content), ephemeral=True)
             return
 
-        extension = attachment.filename.rsplit(".", 1)[-1].casefold() if "." in attachment.filename else ""
-        content_type = (attachment.content_type or "").casefold()
-        allowed_image_extensions = {"png", "jpg", "jpeg", "webp"}
-        if extension in VIDEO_EXTENSIONS or extension not in allowed_image_extensions or not content_type.startswith("image/"):
-            await interaction.response.send_message("画像ファイル以外は投稿できません。", ephemeral=True)
+        can_compress = _can_offer_compression(attachment)
+        if (attachment.size or 0) > MAX_DISCORD_ATTACHMENT_SIZE_BYTES:
+            view = CompressAndResendView(self, interaction.user.id, attachment, content) if can_compress else None
+            await interaction.response.send_message(_upload_too_large_message(can_compress), view=view, ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -138,15 +301,20 @@ class ChatCog(commands.Cog):
                 ephemeral=True,
             )
             return
+        except AnonymousUploadTooLarge:
+            can_compress = _can_offer_compression(attachment)
+            view = CompressAndResendView(self, interaction.user.id, attachment, content) if can_compress else None
+            await interaction.followup.send(_upload_too_large_message(can_compress), view=view, ephemeral=True)
+            return
         if success:
             from ui.views import AnonymousPostView
             channel_data = self.anonymous_channels_data.get(str(interaction.channel.id), {})
             mode = channel_data.get("channel_type", "normal")
             view_factory = lambda cid, mode=mode: AnonymousPostView(self.bot, cid, self.anonymous_channels_data, self.button_update_locks, mode=mode)
             await update_button_message(self.bot, interaction.channel, str(interaction.channel.id), self.anonymous_channels_data, self.button_update_locks, view_factory)
-            await interaction.followup.send("画像を投稿しました。", ephemeral=True)
+            await interaction.followup.send("ファイルを投稿しました。", ephemeral=True)
         else:
-            await interaction.followup.send("画像の投稿に失敗しました。", ephemeral=True)
+            await interaction.followup.send("ファイルの投稿に失敗しました。", ephemeral=True)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
