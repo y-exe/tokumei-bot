@@ -1,4 +1,5 @@
 import discord
+import asyncio
 from discord.ext import commands
 import logging
 import os
@@ -37,11 +38,27 @@ button_update_locks = {}
 async def on_ready():
     print(f'{bot.user} login')
     
-    await bot.add_cog(ChatCog(bot, anonymous_channels_data, button_update_locks))
-    await bot.add_cog(AdminCog(bot, anonymous_channels_data, button_update_locks))
+    if bot.get_cog("ChatCog") is None:
+        await bot.add_cog(ChatCog(bot, anonymous_channels_data, button_update_locks))
+    if bot.get_cog("AdminCog") is None:
+        await bot.add_cog(AdminCog(bot, anonymous_channels_data, button_update_locks))
+
+    # Register persistent interaction handlers before any network-bound setup.
+    # Otherwise existing buttons time out while command synchronization is pending.
+    if not getattr(bot, "persistent_views_registered", False):
+        from ui.views import AnonymousPostView, ReportView
+        for channel_id in anonymous_channels_data:
+            mode = anonymous_channels_data[channel_id].get("channel_type", "normal")
+            bot.add_view(AnonymousPostView(bot, str(channel_id), anonymous_channels_data, button_update_locks, mode=mode))
+        bot.add_view(ReportView())
+        bot.persistent_views_registered = True
+        print("匿名投稿用ボタンおよび処罰ボタンをリスン")
+
+    if not heartbeat_task.is_running():
+        heartbeat_task.start()
 
     try:
-        synced = await bot.tree.sync()
+        synced = await asyncio.wait_for(bot.tree.sync(), timeout=15)
         image_cmd = next((cmd for cmd in synced if cmd.name == "image"), None)
         if image_cmd:
             bot.image_command_id = str(image_cmd.id)
@@ -51,14 +68,6 @@ async def on_ready():
     except Exception as e:
         print(f"コマンドの同期に失敗 : {e}")
         bot.image_command_id = "1488490168854908979"
-    from ui.views import AnonymousPostView, ReportView
-    for channel_id in anonymous_channels_data:
-        mode = anonymous_channels_data[channel_id].get("channel_type", "normal")
-        bot.add_view(AnonymousPostView(bot, str(channel_id), anonymous_channels_data, button_update_locks, mode=mode))
-    
-    bot.add_view(ReportView())
-    print("匿名投稿用ボタンおよび処罰ボタンをリスン")
-        
     archive_old_logs()
     
     for channel_id in list(anonymous_channels_data.keys()):
@@ -68,8 +77,6 @@ async def on_ready():
         else:
             print(f"チャンネル {channel_id} が見つかりませんでした。")
             
-    if not heartbeat_task.is_running():
-        heartbeat_task.start()
     save_json(CHANNELS_FILE, anonymous_channels_data)
 
 if __name__ == "__main__":
