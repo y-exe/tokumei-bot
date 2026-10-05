@@ -36,3 +36,14 @@ test('DM拒否でも削除は完了し、削除失敗時は削除済み通知を
   const closed=fixture({dmFails:true});await guardChannel(closed.message,closed.store);assert.deepEqual(closed.events,['delete','dm']);
   const forbidden=fixture({deleteFails:true});await guardChannel(forbidden.message,forbidden.store);assert.deepEqual(forbidden.events,['delete']);
 });
+
+test('一般投稿は許可・管理者・削除対象のいずれでも案内を再送し、Bot・Webhookは再送ループを作らない',async()=>{
+  for(const options of [{direct:true},{manager:true},{role:true},{},{dmFails:true},{deleteFails:true}]){
+    const f=fixture(options);await guardChannel(f.message,f.store,{bump:async(g,c)=>{assert.equal(g,'g');assert.equal(c,'c');f.events.push('bump');}});
+    assert.equal(f.events.at(-1),'bump');assert.equal(f.events.filter(event=>event==='bump').length,1);
+    if('direct' in options||'manager' in options||'role' in options)assert.deepEqual(f.events,['bump']);
+  }
+  for(const options of [{enabled:false},{bot:true},{webhook:true}]){
+    const f=fixture(options);let bumps=0;await guardChannel(f.message,f.store,{bump:async()=>{bumps++;}});assert.deepEqual(f.events,[]);assert.equal(bumps,0);
+  }
+});

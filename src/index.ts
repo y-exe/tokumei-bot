@@ -27,7 +27,7 @@ const app = new App(client, store, secrets, new MediaService(new SafeHttp(), new
 const health = healthServer(client, store, Number(process.env.HEALTH_PORT ?? 3000));
 const lookup = process.env.LOOKUP_ADMIN_TOKEN ? lookupServer(store,client,process.env.LOOKUP_ADMIN_TOKEN,Number(process.env.LOOKUP_PORT??8765)) : undefined;
 client.on(Events.MessageCreate, message => {
-  void guardChannel(message, store).catch(() => console.error('匿名チャンネルの通常投稿を確認できませんでした。'));
+  void guardChannel(message, store, app.panels).catch(() => console.error('匿名チャンネルの通常投稿を確認できませんでした。'));
 });
 client.on(Events.InteractionCreate, interaction => {
   void app.handle(interaction);
