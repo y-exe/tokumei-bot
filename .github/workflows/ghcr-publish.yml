@@ -1,16 +1,17 @@
-name: Build and Publish Docker image to GHCR
+name: テストとイメージ公開
 
 on:
   push:
     branches: [ "main" ]
-    paths-ignore:
-      - 'README.md'
-      - '.gitignore'
   workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+
+concurrency:
+  group: ghcr-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build-and-push-image:
@@ -20,29 +21,42 @@ jobs:
       packages: write
 
     steps:
-      - name: Checkout repository
+      - name: ソース取得
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
+      - name: Node.jsを準備
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: 依存関係と自動テスト
+        run: |
+          npm ci --no-audit --no-fund
+          npm run check
+          npm test
+          npm run build
+
+      - name: Dockerを準備
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to the Container registry
+      - name: GHCRへログイン
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata (tags, labels) for Docker
+      - name: イメージタグを設定
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest
-            type=sha,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-,format=long
 
-      - name: Build and push Docker image
+      - name: イメージを公開
         uses: docker/build-push-action@v6
         with:
           context: .

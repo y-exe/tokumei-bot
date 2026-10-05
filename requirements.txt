@@ -1,4 +1,0 @@
-discord.py==2.7.1
-python-dotenv==1.2.2
-aiohttp==3.14.3
-psycopg[binary]==3.3.4
