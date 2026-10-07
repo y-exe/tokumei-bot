@@ -174,6 +174,10 @@ export class Store {
   async configuredChannels(guildId: string): Promise<string[]> {
     return (await this.pool.query('SELECT channel_id FROM v2_channels WHERE guild_id=$1 AND enabled=true', [guildId])).rows.map(row => row.channel_id);
   }
+  async configuredPanels(): Promise<{ guildId: string; channelId: string; panelId: string }[]> {
+    return (await this.pool.query('SELECT guild_id, channel_id, panel_id FROM v2_channels WHERE enabled=true AND panel_id IS NOT NULL'))
+      .rows.map(row => ({ guildId: row.guild_id, channelId: row.channel_id, panelId: row.panel_id }));
+  }
   async claimReportNotification(guildId: string, messageId: string): Promise<string | null> {
     return this.transaction(async client => {
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`report:${guildId}:${messageId}`]);

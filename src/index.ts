@@ -40,6 +40,7 @@ client.once(Events.ClientReady, async ready => {
       if (emoji) uiEmoji[key as keyof typeof uiEmoji] = emoji.toString();
     }
   } catch { console.error('案内用絵文字の読み込みに失敗しました。'); }
+  await app.auditPanels().catch(() => console.error('起動時の案内確認に失敗しました。'));
   console.info(`匿名Bot v2 起動完了: ${ready.user.username}`);
 });
 await store.cleanup();

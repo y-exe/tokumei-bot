@@ -118,6 +118,11 @@ export class App {
       }
     }
   }
+  async auditPanels(): Promise<void> {
+    for (const { guildId, channelId } of await this.store.configuredPanels()) {
+      await this.panels.restore(guildId, channelId).catch(() => console.error(`起動時の案内確認に失敗しました(チャンネル:${channelId})`));
+    }
+  }
   async send(interaction: UIInteraction, content: string, media: PostInput['media'], source?: string, replyTo?: string, videoLinks?: string[]): Promise<void> {
     const link = await this.posting.publish({ operationId: interaction.id, guildId: interaction.guildId!, channelId: interaction.channelId!,
       userId: interaction.user.id, roles: this.roles(interaction), text: content, media, source, replyTo, videoLinks });
