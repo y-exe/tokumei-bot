@@ -112,6 +112,17 @@ export class App {
         const files = await this.media.attachments([attachment.url], settings.config);
         await this.send(interaction, interaction.options.getString('text') ?? interaction.options.getString('content') ?? '', files); return;
       }
+      case 'panel': {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const settings = await this.store.settings(interaction.guildId!, interaction.channelId!, true);
+        if (!settings.enabled || !settings.webhook) throw new UserError('このチャンネルには匿名投稿が設置されていません。/setup から設置してください。');
+        await this.panels.restore(interaction.guildId!, interaction.channelId!);
+        const after = await this.store.settings(interaction.guildId!, interaction.channelId!, true);
+        if (after.panelId && after.panelId !== settings.panelId) await this.respond(interaction, [card('案内を再送しました', '案内はチャンネルの最下部にあります。', colors.success)]);
+        else if (after.panelId) await this.respond(interaction, [card('案内はあります', '案内は最後に送った位置にあります。新しい投稿のたびに最下部へ移動します。', colors.info)]);
+        else await this.respond(interaction, [card('案内を確認できませんでした', '手元で /setup から再設置してください。', colors.warning)]);
+        return;
+      }
       case 'url': {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         await this.prepareUrl(interaction, interaction.options.getString('link', true), interaction.options.getString('text') ?? ''); return;

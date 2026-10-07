@@ -16,5 +16,6 @@ export const commands = [
   guildCommand('reports', 'このチャンネルの未対応の通報を確認する').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
   guildCommand('help', 'このチャンネルのルールと使い方を見る'),
   guildCommand('stop', 'このチャンネルの匿名投稿受付を停止する').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+  guildCommand('panel', 'このチャンネルの案内を現在の設定でもう一度送る（誤って消したとき用）').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
   ...['メッセージに返信', 'メッセージを編集', 'メッセージを削除', '匿名つぶやき通報', '埋め込みを編集（Admin）'].map(name => new ContextMenuCommandBuilder().setName(name).setType(ApplicationCommandType.Message).setDMPermission(false)),
 ].map(command => command.toJSON());
