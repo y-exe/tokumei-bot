@@ -101,3 +101,43 @@ test('Pixiv・Bluesky・Mastodonの公開画像をそれぞれの応答から抽
   const mastodon=await service.resolve('https://mastodon.example/@someone/123',defaults);
   assert.equal(mastodon.provider,'mastodon');assert.equal(mastodon.media.length,1);assert.equal(mastodon.warnings.length,1);
 });
+
+test('Xのi/statusやトラッキング付きURLを投稿者の正規URLに変換する',async()=>{
+  class XHttp extends SafeHttp {
+    override async json<T>(url:string):Promise<T>{
+      return {tweet:{author:{screen_name:'1201_exe'},media:{all:[{type:'photo',url:'https://pbs.twimg.com/a.jpg'}]}}} as T;
+    }
+  }
+  const service=new MediaService(new XHttp());
+  const short=await service.resolve('https://x.com/i/status/2107439604907536632',defaults);
+  assert.equal(short.source,'https://x.com/1201_exe/status/2107439604907536632');
+  const tracked=await service.resolve('https://x.com/1201_exe/status/2107439604907536632?s=61',defaults);
+  assert.equal(tracked.source,'https://x.com/1201_exe/status/2107439604907536632');
+  const mobile=await service.resolve('https://mobile.twitter.com/i/web/status/2107439604907536632',defaults);
+  assert.equal(mobile.source,'https://x.com/1201_exe/status/2107439604907536632');
+  const legacy=await service.resolve('https://twitter.com/i/status/2107439604907536632',defaults);
+  assert.equal(legacy.provider,'x');
+});
+
+test('Pixivの旧形式URLも作品ページの正規URLに変換する',async()=>{
+  class PixivHttp extends SafeHttp {
+    override async json<T>(url:string):Promise<T>{assert.ok(url.includes('/ajax/illust/999/pages'));return {error:false,body:[{urls:{original:'https://i.pximg.net/999.png'}}]} as T;}
+  }
+  const result=await new MediaService(new PixivHttp()).resolve('https://www.pixiv.net/member_illust.php?mode=medium&illust_id=999',defaults);
+  assert.equal(result.source,'https://www.pixiv.net/artworks/999');assert.equal(result.media[0]!.kind,'image');
+});
+
+test('Misskeyの公開投稿の画像を取得し、非公開は拒否する',async()=>{
+  class MisskeyHttp extends SafeHttp {
+    constructor(private visibility='public'){super();}
+    override async postJson<T>(url:string,body:unknown):Promise<T>{
+      assert.equal(url,'https://misskey.io/api/notes/show');assert.deepEqual(body,{noteId:'note123'});
+      return {visibility:this.visibility,files:[{type:'image/png',url:'https://misskey.io/files/a.png'},{type:'video/webm',url:'https://misskey.io/files/b.webm'}]} as T;
+    }
+  }
+  const service=new MediaService(new MisskeyHttp());
+  const result=await service.resolve('https://misskey.io/notes/note123',defaults);
+  assert.equal(result.provider,'misskey');assert.equal(result.source,'https://misskey.io/notes/note123');
+  assert.equal(result.media.length,1);assert.equal(result.warnings.length,1);
+  await assert.rejects(new MediaService(new MisskeyHttp('followers')).resolve('https://misskey.io/notes/note123',defaults),/公開された投稿/);
+});

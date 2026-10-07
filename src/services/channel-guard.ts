@@ -11,14 +11,20 @@ export async function guardChannel(message: Message, store: Store, panels?: Pick
   try {
     if (allowsDirectPosts(settings.config)) return;
     const member = message.member ?? await message.guild!.members.fetch(message.author.id);
-    if (member.permissions.has(PermissionFlagsBits.ManageGuild) || member.roles.cache.some(role => settings.config.moderation.managerRoles.includes(role.id))) return;
+    if (member.permissions.has(PermissionFlagsBits.ManageGuild) || member.roles.cache.some(role => settings.config.moderation.managerRoles.includes(role.id))) {
+      console.info(`管理権限のある人の通常投稿のため削除しませんでした(チャンネル:${message.channelId})`);
+      return;
+    }
     try { await message.delete(); }
     catch { console.error('匿名チャンネルの通常投稿を削除できませんでした。'); return; }
+    console.info(`匿名チャンネル(${message.channelId})の通常投稿を削除しました`);
     const warning = new EmbedBuilder().setTitle(`${uiEmoji.error} メッセージを削除しました`).setColor(colors.danger)
       .setDescription(`匿名チャンネル <#${message.channelId}> では、通常のメッセージ送信はできません。\n必ず案内のボタンからメッセージを送信してください。`)
       .setImage('https://i.gyazo.com/d383abacd30bc6afda9b94227d2af790.png');
     if (message.content) warning.addFields({ name: '送信しようとしたメッセージ', value: message.content.slice(0, 1000) });
-    await message.author.send({ embeds: [warning], allowedMentions: { parse: [] } }).catch(() => {
+    await message.author.send({ embeds: [warning], allowedMentions: { parse: [] } }).then(() => {
+      console.info(`通常投稿の削除警告をDMへ送信しました(チャンネル:${message.channelId})`);
+    }).catch(() => {
       console.error('通常投稿の削除通知をDMへ送信できませんでした。');
     });
   } finally {

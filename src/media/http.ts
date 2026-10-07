@@ -22,6 +22,15 @@ export function isPublicAddress(address: string): boolean {
 export interface HttpResult { data: Buffer; contentType: string; url: string; }
 export class SafeHttp {
   async get(value: string, maxBytes: number, headers: Record<string, string> = {}, redirects = 0): Promise<HttpResult> {
+    return this.request('GET', value, maxBytes, headers, undefined, redirects);
+  }
+  async postJson<T = unknown>(value: string, body: unknown, maxBytes = 2 * 1024 * 1024): Promise<T> {
+    const payload = JSON.stringify(body);
+    const result = await this.request('POST', value, maxBytes, { 'Content-Type': 'application/json', 'Content-Length': String(Buffer.byteLength(payload)) }, payload);
+    try { return JSON.parse(result.data.toString('utf8')); }
+    catch { throw new UserError('取得先から画像情報を読み取れませんでした。画像を直接添付してください。'); }
+  }
+  private async request(method: 'GET' | 'POST', value: string, maxBytes: number, headers: Record<string, string> = {}, body: string | undefined, redirects = 0): Promise<HttpResult> {
     let url: URL;
     try { url = new URL(value); } catch { throw new UserError('URLの形式を確認してください。'); }
     if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443'))
@@ -36,7 +45,7 @@ export class SafeHttp {
     const pinned = addresses[0]!;
     const result = await new Promise<HttpResult | { redirect: string }>((resolve, reject) => {
       const req = request(url, {
-        headers: { 'User-Agent': 'TokumeiBot/2.0', ...headers },
+        method, headers: { 'User-Agent': 'TokumeiBot/2.0', ...headers },
         lookup: (_hostname, options, callback) => {
           if (typeof options === 'object' && options.all) (callback as unknown as (error: null, values: typeof addresses) => void)(null, [pinned]);
           else callback(null, pinned.address, pinned.family);
@@ -63,10 +72,13 @@ export class SafeHttp {
       });
       const timer = setTimeout(() => req.destroy(new UserError('画像の取得がタイムアウトしました。直接添付でも投稿できます。')), 15_000);
       req.on('close', () => clearTimeout(timer));
-      req.on('error', reject); req.end();
+      req.on('error', reject);
+      if (body) req.write(body);
+      req.end();
     });
     if ('redirect' in result) {
-      const forwarded = new URL(result.redirect).hostname === url.hostname ? headers : {};
+      const forwarded = Object.fromEntries(Object.entries(new URL(result.redirect).hostname === url.hostname ? headers : {})
+        .filter(([key]) => !key.startsWith('Content-')));
       return this.get(result.redirect, maxBytes, forwarded, redirects + 1);
     }
     return result;

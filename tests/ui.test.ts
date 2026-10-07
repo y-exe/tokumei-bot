@@ -130,7 +130,7 @@ test('URL案内は許可されたサービスに追従し、手動のボタン�
   assert.equal(postModal('url',config).toJSON().title,'Pixiv・BlueskyのURL');
   const manual=resolveConfig(config,{panel:{urlLabel:'作品のURL',urlAutoLabel:false}});
   assert.equal(flatten(panel(manual).toJSON()).find(item=>item.custom_id==='post:url')?.label,'作品のURL');
-  assert.ok(urlMethodLabel(defaults).length<=40);
+  assert.ok(urlMethodLabel(defaults).length<=45);
   const empty=resolveConfig(config,{content:{providers:[]}});
   assert.ok(!customIds(panel(empty).toJSON()).includes('post:url'));
 });

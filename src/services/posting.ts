@@ -11,7 +11,7 @@ import {isRequestMode} from '../domain/config.js';
 
 export class Posting {
   private queue = new SerialQueue(Number.POSITIVE_INFINITY);
-  private volatile = new Map<string,{counter:number;lastUser:string;lastAvatar?:number;users:Map<string,{anonymousId:number;avatar:number;at:number}>}>();
+  private volatile = new Map<string,{lastUser:string;users:Map<string,{anonymousId:number;avatar:number;at:number}>}>();
   private attempts = new Map<string,number>();
   sweep(): void {
     const cutoff=Date.now()-86_400_000;
@@ -66,13 +66,17 @@ export class Posting {
     if(restriction)throw new UserError('このサーバーでは匿名投稿の利用が制限されています。');
     if(isRequestMode(config)&&(await this.store.pool.query('SELECT 1 FROM v2_request_restrictions WHERE guild_id=$1 AND user_id=$2',[input.guildId,input.userId])).rowCount)throw new UserError('このサーバーでは匿名要望の使用権が剥奪されています。');
     const key=`${input.guildId}:${input.channelId}`;
-    const state=this.volatile.get(key)??{counter:0,lastUser:'',lastAvatar:undefined,users:new Map()};
+    const state=this.volatile.get(key)??{lastUser:'',users:new Map()};
     for(const [user,session] of state.users)if(session.at<now-Math.max(config.policy.cooldown*1000,config.identity.minutes*60_000))state.users.delete(user);
     const previous=state.users.get(input.userId);const age=previous?now-previous.at:Infinity;
     if(age<config.policy.cooldown*1000)throw new UserError(`連続投稿は${Math.ceil(config.policy.cooldown-age/1000)}秒後にできます。`);
     const inherit=previous&&state.lastUser===input.userId&&age<config.identity.minutes*60_000;
-    const anonymousId=inherit?previous.anonymousId:state.counter%1000+1;const avatar=inherit?previous.avatar:nextAvatar(state.lastAvatar);
-    state.counter=anonymousId;state.lastUser=input.userId;state.lastAvatar=avatar;state.users.set(input.userId,{anonymousId,avatar,at:now});this.volatile.set(key,state);
+    const persisted=(await this.store.pool.query(`INSERT INTO v2_counters(channel_id) VALUES($1)
+      ON CONFLICT(channel_id) DO UPDATE SET counter=v2_counters.counter RETURNING counter,last_avatar`,[input.channelId])).rows[0];
+    const anonymousId=inherit?previous.anonymousId:Number(persisted.counter)%1000+1;
+    const avatar=inherit?previous.avatar:nextAvatar(persisted.last_avatar==null?undefined:Number(persisted.last_avatar));
+    await this.store.pool.query('UPDATE v2_counters SET counter=$2,last_avatar=$3,last_user=NULL WHERE channel_id=$1',[input.channelId,anonymousId,avatar]);
+    state.lastUser=input.userId;state.users.set(input.userId,{anonymousId,avatar,at:now});this.volatile.set(key,state);
     this.attempts.set(input.operationId,now);
     const webhook=new WebhookClient({url:this.secrets.open(credential)});
     try{

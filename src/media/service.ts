@@ -8,9 +8,21 @@ import { SafeHttp, WorkQueue } from './http.js';
 export interface MediaSource { url: string; kind: 'image' | 'animation' | 'video'; headers?: Record<string, string>; }
 export interface ResolvedMedia { provider: Provider; source: string; media: MediaSource[]; warnings: string[]; }
 const webUrl = z.string().url();
-const xResponse = z.object({ tweet: z.object({ media: z.object({ all: z.array(z.object({ type: z.string(), url: webUrl })) }).optional() }).optional() });
+const xResponse = z.object({ tweet: z.object({
+    media: z.object({ all: z.array(z.object({ type: z.string(), url: webUrl })) }).optional(),
+    author: z.object({ screen_name: z.string().optional(), username: z.string().optional() }).optional(),
+  }).optional() });
 const pixivResponse = z.object({ error: z.boolean(), body: z.array(z.object({ urls: z.object({ original: webUrl }) })).optional() });
 const mastodonResponse = z.object({ visibility: z.string(), media_attachments: z.array(z.object({ type: z.string(), url: webUrl.nullable(), remote_url: webUrl.nullable().optional() })) });
+const misskeyResponse = z.object({ visibility: z.string(), files: z.array(z.object({ type: z.string(), url: webUrl })).optional() });
+const canonical = (url: URL): string => `${url.origin}${url.pathname}`;
+const mediaKind = (url: string, type?: string): MediaSource['kind'] => {
+  const value = (type ?? url).toLowerCase();
+  if (value === 'image/gif' || value.endsWith('.gif')) return 'animation';
+  if (value.startsWith('image/') || value === 'image') return 'image';
+  if (value === 'gifv') return 'animation';
+  return 'video';
+};
 
 export class MediaService {
   constructor(readonly http = new SafeHttp(), readonly queue = new WorkQueue()) {}
@@ -63,26 +75,31 @@ export class MediaService {
     const host = url.hostname.toLowerCase();
     let provider: Provider; let source = url.href; let media: MediaSource[] = [];
     const warnings: string[] = [];
-    if (['x.com', 'www.x.com', 'twitter.com', 'www.twitter.com'].includes(host)) provider = 'x';
+    if (['x.com', 'www.x.com', 'mobile.x.com', 'twitter.com', 'www.twitter.com', 'mobile.twitter.com'].includes(host)) provider = 'x';
     else if (['pixiv.net', 'www.pixiv.net'].includes(host)) provider = 'pixiv';
     else if (host === 'bsky.app') provider = 'bluesky';
     else if (/^\/@[^/]+\/\d+\/?$|^\/users\/[^/]+\/statuses\/\d+\/?$/.test(url.pathname)) provider = 'mastodon';
+    else if (/^\/notes\/[a-z0-9]+\/?$/i.test(url.pathname)) provider = 'misskey';
     else provider = 'direct';
     if (!config.content.providers.includes(provider)) throw new UserError('このサイトのURL変換はサーバー設定で無効になっています。');
     if (provider === 'x') {
-      const match = url.pathname.match(/^\/([\w]+)\/status\/(\d+)(?:\/.*)?$/);
+      const unknownUser = url.pathname.match(/^\/i\/(?:web\/)?status\/(\d+)\/?$/);
+      const match = unknownUser ? ([url.pathname, 'i', unknownUser[1]!] as unknown as RegExpMatchArray)
+        : url.pathname.match(/^\/([\w]+)\/status\/(\d+)(?:\/[^/?]*)?\/?$/);
       if (!match) throw new UserError('Xの投稿URLを入力してください。');
       source = `https://x.com/${match[1]}/status/${match[2]}`;
       for (const api of ['api.fxtwitter.com', 'api.fixupx.com']) {
         try {
           const data = xResponse.parse(await this.http.json(`https://${api}/status/${match[2]}`));
           media = (data.tweet?.media?.all ?? []).map(item => ({ url: item.url, kind: item.type === 'photo' ? 'image' : item.type === 'gif' ? 'animation' : 'video' }));
+          const handle = [data.tweet?.author?.screen_name, data.tweet?.author?.username].find(value => /^@?[\w]{1,20}$/.test(value ?? ''));
+          if (handle) source = `https://x.com/${handle.replace(/^@/, '')}/status/${match[2]}`;
           if (media.length) break;
         } catch {}
       }
     } else if (provider === 'pixiv') {
-      const id = url.pathname.match(/^\/(?:en\/)?artworks\/(\d+)\/?$/)?.[1];
-      if (!id) throw new UserError('Pixivの作品URLを入力してください。');
+      const id = url.pathname.match(/^\/(?:en\/)?artworks\/(\d+)\/?$/)?.[1] ?? (url.pathname === '/member_illust.php' ? new URLSearchParams(url.search).get('illust_id') : null);
+      if (!id || !/^\d+$/.test(id)) throw new UserError('Pixivの作品URLを入力してください。');
       source = `https://www.pixiv.net/artworks/${id}`;
       const data = pixivResponse.parse(await this.http.json(`https://www.pixiv.net/ajax/illust/${id}/pages?lang=ja`));
       if (data.error) throw new UserError('公開作品の画像を取得できませんでした。画像を直接添付してください。');
@@ -90,6 +107,7 @@ export class MediaService {
     } else if (provider === 'bluesky') {
       const match = url.pathname.match(/^\/profile\/([^/]+)\/post\/([^/]+)\/?$/);
       if (!match) throw new UserError('Blueskyの投稿URLを入力してください。');
+      source = canonical(url);
       let did = match[1]!;
       if (!did.startsWith('did:')) {
         const result = z.object({ did: z.string().startsWith('did:') }).parse(await this.http.json(`https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle=${encodeURIComponent(did)}`));
@@ -105,9 +123,16 @@ export class MediaService {
       const id = url.pathname.match(/\/(\d+)\/?$/)?.[1];
       const data = mastodonResponse.parse(await this.http.json(`https://${host}/api/v1/statuses/${id}`));
       if (!['public', 'unlisted'].includes(data.visibility)) throw new UserError('公開された投稿のURLを入力してください。');
+      source = canonical(url);
       media = data.media_attachments.filter(item => item.url || item.remote_url).map(item => ({
-        url: (item.url ?? item.remote_url)!, kind: item.type === 'image' ? 'image' : item.type === 'gifv' ? 'animation' : 'video',
+        url: (item.url ?? item.remote_url)!, kind: mediaKind((item.url ?? item.remote_url)!, item.type === 'gifv' ? 'gifv' : item.type),
       }));
+    } else if (provider === 'misskey') {
+      const id = url.pathname.match(/^\/notes\/([a-z0-9]+)\/?$/i)![1]!;
+      source = `https://${host}/notes/${id}`;
+      const data = misskeyResponse.parse(await this.http.postJson(`https://${host}/api/notes/show`, { noteId: id }));
+      if (!['public', 'home'].includes(data.visibility)) throw new UserError('公開された投稿のURLを入力してください。');
+      media = (data.files ?? []).map(file => ({ url: file.url, kind: mediaKind(file.url, file.type) }));
     } else media = [{ url: source, kind: 'image' }];
     const images = media.filter(item => item.kind === 'image');
     if (images.length !== media.length) warnings.push('このURLに含まれる動画・アニメーションは今回の画像変換から除外しました。');

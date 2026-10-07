@@ -10,13 +10,13 @@ import { Posting } from '../src/services/posting.js';
 import { defaults } from '../src/domain/config.js';
 import type { PostInput } from '../src/domain/validation.js';
 
-let db: PGlite; let server: PGLiteSocketServer; let store: Store; let posting: Posting;
+let db: PGlite; let server: PGLiteSocketServer; let store: Store; let posting: Posting; let secrets: SecretBox;
 const guild = '100000000000000010'; const channel = '200000000000000010'; const user = '300000000000000010';
 const sent: unknown[] = []; const edited: unknown[] = []; let deletes = 0;
 before(async () => {
   db = await PGlite.create(); server = new PGLiteSocketServer({ db, port: 0, host: '127.0.0.1', maxConnections: 5 }); await server.start();
   store = new Store(`postgresql://postgres:postgres@${server.getServerConn()}/postgres`); await store.initialize();
-  const box = new SecretBox(randomBytes(32).toString('base64')); posting = new Posting(store, box);
+  const box = new SecretBox(randomBytes(32).toString('base64')); secrets = box; posting = new Posting(store, box);
   const settings = await store.settings(guild, channel);
   await store.saveSettings(settings, 'channel', { policy: { cooldown: 0 } }, user);
   await store.setPanel(guild, channel, 'panel', box.seal(`https://discord.com/api/webhooks/500000000000000010/${'a'.repeat(68)}`));
@@ -139,13 +139,13 @@ test('停止中は受付を拒否し、設定変更後の画像必須・編集�
   await store.disable(guild, channel); await assert.rejects(posting.publish(post('stopped')), /設置されていません/);
 });
 
-test('保存0でも送信でき、投稿・投稿者・セッション・カウンターをDBに作成しない',async()=>{
+test('保存0でも送信でき、投稿・投稿者・セッションをDBに作成しない(番号と見た目だけは保持する)',async()=>{
   const target='200000000000000011';const settings=await store.settings(guild,target,true);
   await store.saveSettings(settings,'channel',{policy:{retentionDays:0,reportRetentionDays:0,cooldown:0}},user);
   const credential=(await store.settings(guild,channel,true)).webhook!;await store.setPanel(guild,target,'panel',credential);
   const input={...post('no-log'),channelId:target};const before=sent.length;
   assert.ok((await posting.publish(input)).includes(target));assert.equal(sent.length,before+1);
-  for(const table of ['v2_posts','v2_sessions','v2_counters','v2_reports'])assert.equal((await store.pool.query(`SELECT count(*)::int AS n FROM ${table} WHERE channel_id=$1`,[target])).rows[0].n,0);
+  for(const table of ['v2_posts','v2_sessions','v2_reports'])assert.equal((await store.pool.query(`SELECT count(*)::int AS n FROM ${table} WHERE channel_id=$1`,[target])).rows[0].n,0);
   assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM v2_authors WHERE operation_id=$1',[input.operationId])).rows[0].n,0);
   await assert.rejects(posting.publish(input),/処理済み/);assert.equal(sent.length,before+1);
   await posting.publish({...input,operationId:'no-log-continuous'});
@@ -156,6 +156,16 @@ test('保存0でも送信でき、投稿・投稿者・セッション・カウ�
   assert.notEqual(options[2]!.avatarURL,options[1]!.avatarURL);
   assert.notEqual(options[3]!.avatarURL,options[2]!.avatarURL);
   assert.equal(options[2]!.username,'匿名 002');
-  for(const table of ['v2_posts','v2_sessions','v2_counters','v2_reports'])assert.equal((await store.pool.query(`SELECT count(*)::int AS n FROM ${table} WHERE channel_id=$1`,[target])).rows[0].n,0);
+  const counter=(await store.pool.query('SELECT counter,last_avatar,last_user FROM v2_counters WHERE channel_id=$1',[target])).rows[0];
+  assert.equal(counter.counter,3);assert.ok(counter.last_avatar!==null);assert.equal(counter.last_user,null);
   await assert.rejects(posting.own(guild,target,'600000000000000011',user),/保存期限/);
+});
+
+test('保存0の番号と見た目は再起動しても続き、色は直前のものを除外する',async()=>{
+  const target='200000000000000011';const input={...post('no-log-restart'),channelId:target};const before=sent.length;
+  const restarted=new Posting(store,secrets);
+  await restarted.publish(input);
+  const options=sent.slice(before) as {avatarURL:string;username:string}[];
+  assert.equal(options[0]!.username,'匿名 004');
+  assert.notEqual(options[0]!.avatarURL,(sent.slice(0,before).at(-1) as {avatarURL:string}).avatarURL);
 });
