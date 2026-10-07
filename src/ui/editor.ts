@@ -33,9 +33,10 @@ export function editorView(id: string, session: EditorSession): ContainerBuilder
   menu.addActionRowComponents(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder()
     .setCustomId(`cfg:${id}:content`).setPlaceholder('投稿形式を選ぶ').setMinValues(1).setMaxValues(5).addOptions(options)));
   menu.addActionRowComponents(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder()
-    .setCustomId(`cfg:${id}:providers`).setPlaceholder('URL変換するサイト').setMinValues(0).setMaxValues(6)
+    .setCustomId(`cfg:${id}:providers`).setPlaceholder('URL変換するサイト').setMinValues(0).setMaxValues(9)
     .addOptions([{ label: 'X / Twitter', value: 'x' }, { label: 'Pixiv', value: 'pixiv' }, { label: '画像への直接URL', value: 'direct' },
-      { label: 'Bluesky', value: 'bluesky' }, { label: 'Mastodon', value: 'mastodon' }, { label: 'Misskey', value: 'misskey' }].map(item => ({ ...item, default: config.content.providers.includes(item.value as Config['content']['providers'][number]) })))));
+      { label: 'Bluesky', value: 'bluesky' }, { label: 'Mastodon', value: 'mastodon' }, { label: 'Misskey', value: 'misskey' },
+      { label: 'TikTok', value: 'tiktok' }, { label: 'Instagram', value: 'instagram' }, { label: 'Threads', value: 'threads' }].map(item => ({ ...item, default: config.content.providers.includes(item.value as Config['content']['providers'][number]) })))));
   menu.addActionRowComponents(row(button(`cfg:${id}:management`, '管理・投稿ロール'), button(`cfg:${id}:filter`, '禁止語・ドメイン'), button(`cfg:${id}:export`, '書き出し'), button(`cfg:${id}:import`, '読み込み')));
   menu.addActionRowComponents(row(button(`cfg:${id}:save`, session.installing ? '保存して設置' : '保存して反映', ButtonStyle.Success),
     button(`cfg:${id}:restore`, '前の設定を読み込む'), button(`cfg:${id}:reset`, session.scope === 'channel' ? '標準に戻す' : '初期値に戻す'), button(`cfg:${id}:cancel`, 'キャンセル')));

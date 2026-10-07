@@ -25,7 +25,7 @@ export const contentSchema = z.object({
   animation: z.boolean(), video: z.boolean(),
   maxFiles: z.number().int().min(1).max(10),
   maxFileMB: z.number().int().min(1).max(25),
-  providers: z.array(z.enum(['x', 'pixiv', 'direct', 'bluesky', 'mastodon', 'misskey'])).max(6),
+  providers: z.array(z.enum(['x', 'pixiv', 'direct', 'bluesky', 'mastodon', 'misskey', 'tiktok', 'instagram', 'threads'])).max(9),
 }).strict();
 export const identitySchema = z.object({ showId: z.boolean(), minutes: z.number().int().min(0).max(1440), kind:z.enum(['chat','request']).optional() }).strict();
 export const policySchema = z.object({
@@ -67,12 +67,12 @@ export function parseRetention(value: string): number|null {
   if(!/^\d+$/.test(value.trim()))throw new UserError('保存期間は0、日数、または「無期限」を指定してください。');
   return Number(value.trim());
 }
-const providerNames: Record<Provider,string> = {x:'X',pixiv:'Pixiv',bluesky:'Bluesky',mastodon:'Mastodon',misskey:'Misskey',direct:'画像URL'};
+export const providerNames: Record<Provider,string> = {x:'X',pixiv:'Pixiv',bluesky:'Bluesky',mastodon:'Mastodon',misskey:'Misskey',tiktok:'TikTok',instagram:'Instagram',threads:'Threads',direct:'画像URL'};
 export function automaticUrlLabel(config: Config): boolean {
   return config.panel.urlAutoLabel ?? ['URLから画像','URLから画像を送る'].includes(config.panel.urlLabel);
 }
 export function urlMethodLabel(config: Config): string {
-  const names = (['x','pixiv','bluesky','mastodon','misskey','direct'] as const).filter(provider=>config.content.providers.includes(provider)).map(provider=>providerNames[provider]);
+  const names = (['x','pixiv','bluesky','mastodon','misskey','tiktok','instagram','threads','direct'] as const).filter(provider=>config.content.providers.includes(provider)).map(provider=>providerNames[provider]);
   if (!names.length) return '対応URLなし';
   const base = names.join('・');
   const suffix = names.at(-1)==='画像URL' ? '' : 'のURL';
@@ -85,7 +85,7 @@ export const defaults: Config = {
   panel: { title: '匿名チャット', description: '名前を表示せずに投稿できます。', color: 0x2ca6a4, style: 'v2', repost: true,
     image: '', thumbnail: '', footer: '', textLabel: '投稿する', imageLabel: '画像を送る', urlLabel: 'URLから画像', helpLabel: 'ルール・使い方' },
   content: { text: true, images: true, urls: true, caption: true, animation: false, video: false,
-    maxFiles: 10, maxFileMB: 10, providers: ['x', 'pixiv', 'direct', 'bluesky', 'mastodon', 'misskey'] },
+    maxFiles: 10, maxFileMB: 10, providers: ['x', 'pixiv', 'direct', 'bluesky', 'mastodon', 'misskey', 'tiktok', 'instagram', 'threads'] },
   identity: { showId: true, minutes: 20, kind:'chat' },
   policy: { rules: '個人への攻撃や個人情報の投稿は禁止です。サーバーのルールに従ってご利用ください。',
     rulesUrl: '', cooldown: 5, blockedWords: [], blockedDomains: [], allowedRoles: [], retentionDays: null, reportRetentionDays: null },

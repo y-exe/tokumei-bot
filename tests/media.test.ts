@@ -137,6 +137,34 @@ test('Pixivの旧形式URLも作品ページの正規URLに変換する',async()
   assert.equal(result.source,'https://www.pixiv.net/artworks/999');assert.equal(result.media[0]!.kind,'image');
 });
 
+test('TikTok・Instagram・Threadsの公開投稿から画像と動画を取得する',async()=>{
+  const image=await sharp({create:{width:8,height:8,channels:3,background:'#2266cc'}}).png().toBuffer();
+  class AtmoHttp extends SafeHttp {
+    override async json<T>(url:string):Promise<T>{
+      if(url.includes('/2/tiktok/'))return {status:{url:'https://www.tiktok.com/@user/video/123',media:{all:[
+        {type:'photo',url:'https://p16-sign-va.tiktokcdn.com/photo.jpg'},
+        {type:'video',url:'https://api.atmosphere.tools/proxy?url=https%3A%2F%2Fv16.tiktok.com%2Fa.mp4'}]}}} as T;
+      return {code:200,status:{url:'https://www.instagram.com/reel/abc/',media:{all:[{type:'image',url:'https://scontent.cdninstagram.com/a.jpg'}]}}} as T;
+    }
+    override async get(url:string){return url.includes('/proxy') ? {data:Buffer.from('fakevideo'),contentType:'video/mp4',url} : {data:image,contentType:'image/jpeg',url};}
+  }
+  const http=new AtmoHttp();const service=new MediaService(http);
+  const tiktok=await service.resolve('https://www.tiktok.com/@user/video/123?is_from_webapp=1',defaults);
+  assert.equal(tiktok.provider,'tiktok');assert.equal(tiktok.source,'https://www.tiktok.com/@user/video/123');assert.equal(tiktok.media.length,2);
+  const tiktokPost=await service.fromUrl('https://www.tiktok.com/@user/video/123',defaults);
+  assert.equal(tiktokPost.files.length,2);assert.equal(tiktokPost.files[1]!.kind,'video');
+  const instagram=await service.resolve('https://www.instagram.com/reel/abc/',defaults);
+  assert.equal(instagram.provider,'instagram');assert.equal(instagram.source,'https://www.instagram.com/reel/abc/');
+  const instagramPost=await service.fromUrl('https://www.instagram.com/reel/abc/',defaults);
+  assert.equal(instagramPost.files.length,1);assert.equal(instagramPost.files[0]!.kind,'image');
+  const threads=await service.resolve('https://www.threads.net/@user/post/abc123',defaults);
+  assert.equal(threads.provider,'threads');
+  const short=await service.resolve('https://vm.tiktok.com/abc123/',defaults);
+  assert.equal(short.provider,'tiktok');
+  const disabled=structuredClone(defaults);disabled.content.providers=['pixiv'];
+  await assert.rejects(service.resolve('https://www.tiktok.com/@user/video/123',disabled),/無効/);
+});
+
 test('直接添付は画像以外のファイルも元の名前のまま受け付ける',async()=>{
   class Http extends SafeHttp { override async get(url:string){return {data:Buffer.from('%PDF-1.4 test'),contentType:'application/pdf',url};} }
   const files=await new MediaService(new Http()).attachments(['https://cdn.discordapp.com/ephemeral-attachments/1/2/document_(1).PDF'],defaults);

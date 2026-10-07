@@ -13,8 +13,14 @@ export function choice(id:string,label:string,value:string,options:{label:string
     .addOptions(options.map(option=>({...option,default:option.value===value}))));
 }
 export function postModal(kind: 'text' | 'image' | 'url', config: Config, customId = `submit:${kind}`): ModalBuilder {
-  const modal = new ModalBuilder().setCustomId(customId).setTitle(kind === 'text' ? '匿名で投稿' : kind === 'image' ? '匿名で画像を送る' : urlMethodLabel(config));
-  if (kind === 'url') modal.addLabelComponents(input('url', urlMethodLabel(config), '', 1000));
+  const modal = new ModalBuilder().setCustomId(customId).setTitle(kind === 'text' ? '匿名で投稿' : kind === 'image' ? '匿名で画像を送る' : 'URLから画像を送る');
+  if (kind === 'url') {
+    const field = new TextInputBuilder().setCustomId('url').setStyle(TextInputStyle.Short).setMaxLength(1000).setRequired(true);
+    const label = new LabelBuilder().setLabel('URLを入力').setTextInputComponent(field);
+    const services = urlMethodLabel(config);
+    if (services && services !== '対応URLなし') label.setDescription(`${services} に対応しています。`);
+    modal.addLabelComponents(label);
+  }
   if (kind === 'image') modal.addLabelComponents(new LabelBuilder().setLabel('ファイルを選択（10個まで）')
     .setDescription('画像は位置情報を取り除いて最適化し、その他のファイルはそのまま送ります。')
     .setFileUploadComponent(new FileUploadBuilder().setCustomId('files').setMinValues(1).setMaxValues(10).setRequired(true)));

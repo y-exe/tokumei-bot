@@ -1,6 +1,7 @@
 import sharp from 'sharp';
 import { z } from 'zod';
 import type { Config, Provider } from '../domain/config.js';
+import { providerNames } from '../domain/config.js';
 import { UserError } from '../domain/errors.js';
 import type { MediaFile } from '../domain/validation.js';
 import { SafeHttp, WorkQueue } from './http.js';
@@ -30,6 +31,10 @@ const xResponse = z.object({ tweet: z.object({
 const pixivResponse = z.object({ error: z.boolean(), body: z.array(z.object({ urls: z.object({ original: webUrl }) })).optional() });
 const mastodonResponse = z.object({ visibility: z.string(), media_attachments: z.array(z.object({ type: z.string(), url: webUrl.nullable(), remote_url: webUrl.nullable().optional() })) });
 const misskeyResponse = z.object({ visibility: z.string(), files: z.array(z.object({ type: z.string(), url: webUrl })).optional() });
+const atmoResponse = z.object({ status: z.object({
+    url: z.string().optional(),
+    media: z.object({ all: z.array(z.object({ type: z.string(), url: z.string() })).optional() }).optional(),
+  }).nullable().optional() }).passthrough();
 const canonical = (url: URL): string => `${url.origin}${url.pathname}`;
 const mediaKind = (url: string, type?: string): MediaSource['kind'] => {
   const value = (type ?? url).toLowerCase();
@@ -93,6 +98,9 @@ export class MediaService {
     else if (['pixiv.net', 'www.pixiv.net'].includes(host)) provider = 'pixiv';
     else if (host === 'bsky.app') provider = 'bluesky';
     else if (/^\/@[^/]+\/\d+\/?$|^\/users\/[^/]+\/statuses\/\d+\/?$/.test(url.pathname)) provider = 'mastodon';
+    else if (/(?:^|\.)tiktok\.com$/.test(host) || host === 'vm.tiktok.com' || host === 'vt.tiktok.com') provider = 'tiktok';
+    else if (/(?:^|\.)instagram\.com$/.test(host) || host === 'instagr.am') provider = 'instagram';
+    else if (/(?:^|\.)threads\.(com|net)$/.test(host)) provider = 'threads';
     else if (/^\/notes\/[a-z0-9]+\/?$/i.test(url.pathname)) provider = 'misskey';
     else provider = 'direct';
     if (!config.content.providers.includes(provider)) throw new UserError('このサイトのURL変換はサーバー設定で無効になっています。');
@@ -147,6 +155,12 @@ export class MediaService {
       const data = misskeyResponse.parse(await this.http.postJson(`https://${host}/api/notes/show`, { noteId: id }));
       if (!['public', 'home'].includes(data.visibility)) throw new UserError('公開された投稿のURLを入力してください。');
       media = (data.files ?? []).map(file => ({ url: file.url, kind: mediaKind(file.url, file.type) }));
+    } else if (provider === 'tiktok' || provider === 'instagram' || provider === 'threads') {
+      const data = atmoResponse.parse(await this.http.json(`https://api.atmosphere.tools/2/${provider}/status/${encodeURIComponent(value.trim())}`));
+      const post = data.status;
+      if (!post) throw new UserError(`${providerNames[provider]}の公開投稿を取得できませんでした。非公開か、URLを確認してください。`);
+      source = post.url ?? canonical(url);
+      media = (post.media?.all ?? []).map(item => ({ url: item.url, kind: mediaKind(item.url, item.type) }));
     } else media = [{ url: source, kind: 'image' }];
     if (!media.length) throw new UserError('画像を取得できませんでした。画像のある公開投稿か、画像ファイルのURLを指定してください。');
     if (media.length > 10) warnings.push('Discordの上限により、最初の10個のファイルを添付します。');
@@ -162,7 +176,9 @@ export class MediaService {
         if (resolved.provider === 'x' && isTwimgVideo(item.url)) { videoLinks.push(videoProxyUrl(item.url)); continue; }
         try {
           const response = await this.http.get(item.url, DISCORD_FILE_LIMIT, item.headers);
-          files.push(await this.optimize(response.data, config, files.length, fileNameFromUrl(item.url), response.contentType));
+          const original = fileNameFromUrl(item.url);
+          const name = original && original !== 'proxy' ? original : undefined;
+          files.push(await this.optimize(response.data, config, files.length, name, response.contentType));
         } catch (error) {
           if (error instanceof UserError && error.message.includes('大きすぎ')) warnings.push(`元のファイル${sourceIndex + 1}は大きすぎて添付できませんでした。`);
           else warnings.push(`元のファイル${sourceIndex + 1}を取得できませんでした。取得できたファイルだけを表示しています。`);
