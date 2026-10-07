@@ -15,9 +15,9 @@ export function choice(id:string,label:string,value:string,options:{label:string
 export function postModal(kind: 'text' | 'image' | 'url', config: Config, customId = `submit:${kind}`): ModalBuilder {
   const modal = new ModalBuilder().setCustomId(customId).setTitle(kind === 'text' ? '匿名で投稿' : kind === 'image' ? '匿名で画像を送る' : urlMethodLabel(config));
   if (kind === 'url') modal.addLabelComponents(input('url', urlMethodLabel(config), '', 1000));
-  if (kind === 'image') modal.addLabelComponents(new LabelBuilder().setLabel(`画像を選択（${config.content.maxFiles}枚まで）`)
-    .setDescription('ファイル名や位置情報は投稿時に取り除きます。')
-    .setFileUploadComponent(new FileUploadBuilder().setCustomId('files').setMinValues(1).setMaxValues(config.content.maxFiles).setRequired(true)));
+  if (kind === 'image') modal.addLabelComponents(new LabelBuilder().setLabel('ファイルを選択（10個まで）')
+    .setDescription('画像は位置情報を取り除いて最適化し、その他のファイルはそのまま送ります。')
+    .setFileUploadComponent(new FileUploadBuilder().setCustomId('files').setMinValues(1).setMaxValues(10).setRequired(true)));
   if (kind === 'text' || config.content.caption)
     modal.addLabelComponents(input('text', kind === 'text' ? '本文' : '説明文（任意）', '', 1800, true, kind === 'text'));
   return modal;

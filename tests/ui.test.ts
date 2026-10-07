@@ -79,7 +79,7 @@ test('旧ボタンの文字・色・絵文字と3つの並びを、V2構造を�
 test('画像ボタンからLabel内のFileUploadで直接複数ファイルを選択できる', () => {
   const modal = postModal('image', defaults).toJSON();
   const file = flatten(modal).find(item => item.type === ComponentType.FileUpload)!;
-  assert.equal(file.max_values, 5); assert.equal(file.min_values, 1); assert.equal(file.required, true);
+  assert.equal(file.max_values, 10); assert.equal(file.min_values, 1); assert.equal(file.required, true);
   const label = flatten(modal).find(item => (item.component as Record<string, unknown> | undefined)?.type === ComponentType.FileUpload)!;
   assert.equal(label.type, ComponentType.Label);
   assert.ok(!JSON.stringify(modal).includes('1枚10MB以内'));
@@ -96,14 +96,18 @@ test('画像とサムネイルを設定した編集画面も40コンポーネン
   assert.ok(flatten(view).filter(item => String(item.custom_id ?? '').startsWith('post:')).every(item => item.disabled));
   assert.ok(flatten(managementView('session', session).map(item => item.toJSON())).length <= 40);
 });
-test('匿名投稿とプレビューは添付をMediaGalleryで明示し、画像選択とキャンセルを持つ', () => {
+test('匿名投稿とプレビューは添付をMediaGalleryで明示し、ファイル選択とキャンセルを持つ', () => {
   const file = { name: 'image_1.jpg', data: Buffer.from('image'), kind: 'image' as const };
+  const video = { name: 'clip.mp4', data: Buffer.from('video'), kind: 'video' as const };
   const post = postCard('こんにちは', [file], 0x5865f2).toJSON();
   const gallery = flatten(post).find(item => item.type === ComponentType.MediaGallery)!;
   assert.deepEqual((gallery.items as { media: { url: string } }[])[0]?.media.url, 'attachment://image_1.jpg');
-  const preview = previewView('session', { owner: 'u', guildId: 'g', channelId: 'c', text: '', source: 'https://example.com/a', warnings: [], files: [file], selected: [0], sending: false });
-  assert.ok(customIds(preview.map(item => item.toJSON())).includes('preview:session:cancel'));
-  assert.ok(customIds(preview.map(item => item.toJSON())).includes('preview:session:select'));
+  const preview = previewView('session', { owner: 'u', guildId: 'g', channelId: 'c', text: '', source: 'https://example.com/a', warnings: [], files: [file, video], selected: [0], sending: false, videoLinks: ['https://x-p.yexe.xyz/amplify_video/1/vid/a.mp4'] });
+  const view = preview.map(item => item.toJSON());
+  assert.ok(customIds(view).includes('preview:session:cancel'));
+  assert.ok(customIds(view).includes('preview:session:select'));
+  assert.ok(JSON.stringify(view).includes('[動画](https://x-p.yexe.xyz/amplify_video/1/vid/a.mp4)'));
+  assert.ok(!JSON.stringify(view).includes('attachment://clip.mp4'));
 });
 test('スラッシュコマンド名は短く、ハイフンを使わず、imageを持つ', () => {
   const slash = commands.filter(command => !command.type || command.type === 1);
@@ -116,7 +120,7 @@ test('説明文禁止時は添付とURLフォーム・確認画面の説明文�
   const config=resolveConfig(defaults,{content:{text:false,caption:false}});
   for(const kind of ['image','url'] as const)assert.ok(!customIds(postModal(kind,config).toJSON()).includes('text'));
   const file={name:'image.jpg',data:Buffer.from('image'),kind:'image' as const};
-  const session={owner:'u',guildId:'g',channelId:'c',text:'',source:'https://example.com/a',warnings:[],files:[file],selected:[0],sending:false};
+  const session={owner:'u',guildId:'g',channelId:'c',text:'',source:'https://example.com/a',warnings:[],files:[file],selected:[0],sending:false,videoLinks:[]};
   assert.ok(!customIds(previewView('p',session,false).map(item=>item.toJSON())).includes('preview:p:edit'));
   assert.ok(customIds(previewView('p',session,true).map(item=>item.toJSON())).includes('preview:p:edit'));
   assert.ok(JSON.stringify(editorModal('s','caption',config).toJSON()).includes('許可しない（画像のみ）'));

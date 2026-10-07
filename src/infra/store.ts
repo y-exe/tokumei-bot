@@ -16,6 +16,7 @@ export interface StoredPost {
   delivery_webhook: string | null;
   anonymous_id: number; avatar: number; status: string; created_at: Date;
   media: { url: string; name: string; kind: string }[];
+  videoLinks: string[];
 }
 export interface ReportNotice {
   guild_id: string; channel_id: string; message_id: string; count: number;
@@ -81,6 +82,7 @@ CREATE TABLE IF NOT EXISTS v2_actions (
 );`;
 
 const reportRetrySchema = `
+ALTER TABLE v2_posts ADD COLUMN IF NOT EXISTS video_links jsonb;
 ALTER TABLE v2_reports ADD COLUMN IF NOT EXISTS notification_retry_at timestamptz;
 ALTER TABLE v2_reports ADD COLUMN IF NOT EXISTS moderation_token text;
 ALTER TABLE v2_actions ADD COLUMN IF NOT EXISTS reason text;
@@ -207,7 +209,7 @@ export class Store {
           THEN c.overrides#>>'{moderation,reportChannel}' ELSE g.config#>>'{moderation,reportChannel}' END IS NOT NULL
       ORDER BY n.oldest LIMIT 20`, [guildId, messageId])).rows;
   }
-  async reserve(input: { operationId: string; guildId: string; channelId: string; userId: string; text: string; source?: string; replyTo?: string }, config: Config, deliveryWebhook?: string): Promise<StoredPost> {
+  async reserve(input: { operationId: string; guildId: string; channelId: string; userId: string; text: string; source?: string; replyTo?: string; videoLinks?: string[] }, config: Config, deliveryWebhook?: string): Promise<StoredPost> {
     if(config.policy.retentionDays===0)throw new UserError('保存しない設定では投稿ログを作成できません。');
     return this.transaction(async client => {
       await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`post:${input.guildId}:${input.channelId}`]);
@@ -236,8 +238,8 @@ export class Store {
       await client.query(`INSERT INTO v2_sessions VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(guild_id,channel_id,user_id)
         DO UPDATE SET anonymous_id=$4,avatar=$5,last_post=$6`, [input.guildId, input.channelId, input.userId, anonymousId, avatar, now]);
       const expires = config.policy.retentionDays===null?'infinity':new Date(now.getTime() + config.policy.retentionDays * 86_400_000);
-      const row = (await client.query(`INSERT INTO v2_posts(operation_id,guild_id,channel_id,content,source,reply_to,anonymous_id,avatar,expires_at,delivery_webhook,layout)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'plain') RETURNING *`, [input.operationId, input.guildId, input.channelId, input.text, input.source ?? null, input.replyTo ?? null, anonymousId, avatar, expires, deliveryWebhook ?? null])).rows[0];
+      const row = (await client.query(`INSERT INTO v2_posts(operation_id,guild_id,channel_id,content,source,reply_to,anonymous_id,avatar,expires_at,delivery_webhook,layout,video_links)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'plain',$11::jsonb) RETURNING *`, [input.operationId, input.guildId, input.channelId, input.text, input.source ?? null, input.replyTo ?? null, anonymousId, avatar, expires, deliveryWebhook ?? null, JSON.stringify(input.videoLinks ?? [])])).rows[0];
       await client.query('INSERT INTO v2_authors VALUES($1,$2,$3)', [input.operationId, input.userId, expires]);
       return row;
     });
@@ -265,8 +267,10 @@ export class Store {
         AND a.expires_at>now() AND p.expires_at>now() AND p.status IN ('sending','uncertain','sent')`, [guildId,channelId,userId,operationId])).rows[0] ?? null;
   }
   async post(guildId: string, channelId: string, messageId: string): Promise<StoredPost | null> {
-    return (await this.pool.query(`SELECT p.*, a.user_id FROM v2_posts p LEFT JOIN v2_authors a ON a.operation_id=p.operation_id AND a.expires_at>now()
-      WHERE p.guild_id=$1 AND p.channel_id=$2 AND p.message_id=$3 AND p.expires_at>now() AND p.status='sent'`, [guildId, channelId, messageId])).rows[0] ?? null;
+    const row = (await this.pool.query(`SELECT p.*, a.user_id FROM v2_posts p LEFT JOIN v2_authors a ON a.operation_id=p.operation_id AND a.expires_at>now()
+      WHERE p.guild_id=$1 AND p.channel_id=$2 AND p.message_id=$3 AND p.expires_at>now() AND p.status='sent'`, [guildId, channelId, messageId])).rows[0];
+    const post = row ? { ...row, videoLinks: Array.isArray(row.video_links) ? row.video_links : [] } : null;
+    return post;
   }
   async ownPosts(guildId: string, channelId: string, userId: string): Promise<StoredPost[]> {
     return (await this.pool.query(`SELECT p.* FROM v2_posts p JOIN v2_authors a USING(operation_id)

@@ -25,11 +25,10 @@ export function editorView(id: string, session: EditorSession): ContainerBuilder
   menu.addActionRowComponents(row(button(`cfg:${id}:rules`, 'ルール'), button(`cfg:${id}:limits`, '枚数・制限'), button(`cfg:${id}:identity`, '匿名ID・保存期間'), button(`cfg:${id}:caption`, '画像の説明文')));
   const options = [
     { label: 'テキストだけの投稿', value: 'text', description: '画像なしでも投稿できる' },
-    { label: '画像の直接添付', value: 'images', description: 'フォームから画像を選択できる' },
-    { label: 'URLから画像を取得', value: 'urls', description: '対応サイトの画像を自動変換する' },
+    { label: 'ファイルの直接添付', value: 'images', description: 'フォームから画像や動画などを選択できる' },
+    { label: 'URLから画像を取得', value: 'urls', description: '対応サイトの画像や動画を自動変換する' },
     { label: '画像に説明文を添える', value: 'caption', description: '無効にすると説明文欄・編集ボタンを表示しない' },
-    { label: '動く画像の添付', value: 'animation', description: 'GIF・アニメーションWebPを許可する' },
-  ].map(option => ({ ...option, default: config.content[option.value as 'text' | 'images' | 'urls' | 'caption' | 'animation'] }));
+    ].map(option => ({ ...option, default: config.content[option.value as 'text' | 'images' | 'urls' | 'caption'] }));
   menu.addTextDisplayComponents(text('**投稿できる内容** · 選択した項目を有効にします'));
   menu.addActionRowComponents(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder()
     .setCustomId(`cfg:${id}:content`).setPlaceholder('投稿形式を選ぶ').setMinValues(1).setMaxValues(5).addOptions(options)));
@@ -84,7 +83,7 @@ export function editorModal(id: string, action: string, config: Config): ModalBu
     case 'images': modal.addLabelComponents(input('image', '画像URL（空欄で削除）', config.panel.image, 1000, false, false), input('thumbnail', 'サムネイルURL（空欄で削除）', config.panel.thumbnail, 1000, false, false)); break;
     case 'labels': modal.addLabelComponents(input('textLabel', 'テキスト投稿ボタン', config.panel.textLabel, 40), input('imageLabel', '画像投稿ボタン', config.panel.imageLabel, 40), input('urlLabel', 'URL変換ボタン', config.panel.urlLabel, 40), input('helpLabel', 'ヘルプボタン', config.panel.helpLabel, 40)); break;
     case 'rules': modal.addLabelComponents(input('rules', 'サーバールール', config.policy.rules, 2500, true, false), input('rulesUrl', '詳細ルールのURL（任意）', config.policy.rulesUrl, 1000, false, false)); break;
-    case 'limits': modal.addLabelComponents(input('maxFiles', '画像の最大枚数（1〜10）', `${config.content.maxFiles}`, 2), input('cooldown', '投稿間隔の秒数（0〜3600）', `${config.policy.cooldown}`, 4), input('threshold', '通報通知の人数（1〜50）', `${config.moderation.reportThreshold}`, 2)); break;
+    case 'limits': modal.addLabelComponents(input('cooldown', '投稿間隔の秒数（0〜3600）', `${config.policy.cooldown}`, 4), input('threshold', '通報通知の人数（1〜50）', `${config.moderation.reportThreshold}`, 2)); break;
     case 'identity': modal.addLabelComponents(toggle('showId','匿名IDを表示',config.identity.showId), input('minutes', '連続投稿のID保持時間（分、0〜1440）', `${config.identity.minutes}`, 4), input('retention', '投稿ログ（0・1〜90日・無期限）', config.policy.retentionDays===null?'無期限':`${config.policy.retentionDays}`, 8), input('reportRetention', '通報内容（0・1〜180日・無期限）', config.policy.reportRetentionDays===null?'無期限':`${config.policy.reportRetentionDays}`, 8)); break;
     case 'filter': modal.addLabelComponents(input('words', '禁止語（1行に1つ、空欄で解除）', config.policy.blockedWords.join('\n'), 3000, true, false), input('domains', '禁止ドメイン（1行に1つ）', config.policy.blockedDomains.join('\n'), 3000, true, false)); break;
     case 'import': modal.addLabelComponents(new LabelBuilder().setLabel('書き出した設定JSON').setFileUploadComponent(new FileUploadBuilder().setCustomId('template').setMinValues(1).setMaxValues(1).setRequired(true))); break;

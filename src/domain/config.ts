@@ -85,7 +85,7 @@ export const defaults: Config = {
   panel: { title: '匿名チャット', description: '名前を表示せずに投稿できます。', color: 0x2ca6a4, style: 'v2', repost: true,
     image: '', thumbnail: '', footer: '', textLabel: '投稿する', imageLabel: '画像を送る', urlLabel: 'URLから画像', helpLabel: 'ルール・使い方' },
   content: { text: true, images: true, urls: true, caption: true, animation: false, video: false,
-    maxFiles: 5, maxFileMB: 10, providers: ['x', 'pixiv', 'direct', 'bluesky', 'mastodon', 'misskey'] },
+    maxFiles: 10, maxFileMB: 10, providers: ['x', 'pixiv', 'direct', 'bluesky', 'mastodon', 'misskey'] },
   identity: { showId: true, minutes: 20, kind:'chat' },
   policy: { rules: '個人への攻撃や個人情報の投稿は禁止です。サーバーのルールに従ってご利用ください。',
     rulesUrl: '', cooldown: 5, blockedWords: [], blockedDomains: [], allowedRoles: [], retentionDays: null, reportRetentionDays: null },

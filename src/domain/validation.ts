@@ -1,10 +1,10 @@
 import type { Config } from './config.js';
 import { UserError } from './errors.js';
 
-export interface MediaFile { data: Buffer; name: string; kind: 'image' | 'animation' | 'video'; }
+export interface MediaFile { data: Buffer; name: string; kind: 'image' | 'animation' | 'video' | 'file'; }
 export interface PostInput {
   guildId: string; channelId: string; userId: string; roles: string[]; operationId: string;
-  text: string; media: MediaFile[]; source?: string; replyTo?: string;
+  text: string; media: MediaFile[]; source?: string; replyTo?: string; videoLinks?: string[];
 }
 
 export function validateText(text: string, config: Config, maxLength = 1800): void {
@@ -32,13 +32,10 @@ export function validatePost(input: PostInput, config: Config): void {
   if (input.media.length && !config.content.images) throw new UserError('このチャンネルはテキスト専用です。');
   if (input.media.length && input.text.trim() && !config.content.caption) throw new UserError('このチャンネルでは画像に説明文を付けられません。');
   if (input.source && !config.content.urls) throw new UserError('このチャンネルではURL変換を利用できません。画像を直接添付してください。');
-  if (input.media.length > config.content.maxFiles) throw new UserError(`一度に投稿できる画像は${config.content.maxFiles}枚までです。`);
-  for (const file of input.media) {
-    if (file.kind === 'animation' && !config.content.animation) throw new UserError('このチャンネルでは動く画像を投稿できません。');
-    if (file.kind === 'video' && !config.content.video) throw new UserError('このチャンネルでは動画を投稿できません。');
-  }
+  if (input.media.length > 10) throw new UserError('Discordの上限により、1回に添付できるファイルは10個までです。');
 }
 
-export function postContent(text: string, source?: string, replyTo?: string, guildId?: string, channelId?: string, replyNumber?: number): string {
-  return [replyTo && replyNumber !== undefined ? `[>>${replyNumber}](https://discord.com/channels/${guildId}/${channelId}/${replyTo})` : '', text.trim(), source ? `出典: <${source}>` : ''].filter(Boolean).join('\n');
+export function postContent(text: string, source?: string, replyTo?: string, guildId?: string, channelId?: string, replyNumber?: number, videoLinks?: string[]): string {
+  return [replyTo && replyNumber !== undefined ? `[>>${replyNumber}](https://discord.com/channels/${guildId}/${channelId}/${replyTo})` : '', text.trim(), source ? `出典: <${source}>` : '',
+    ...(videoLinks ?? []).map(link => `[動画](${link})`)].filter(Boolean).join('\n');
 }

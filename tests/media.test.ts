@@ -19,7 +19,8 @@ test('画像処理は透明度を保ち、サイズを抑え、位置情報と�
   const metadata = await sharp(result.data).metadata();
   assert.ok(metadata.hasAlpha); assert.ok(metadata.width! <= 1600); assert.ok(metadata.height! <= 1600);
   assert.equal(metadata.exif, undefined); assert.equal(result.name, 'image_1.png');
-  await assert.rejects(service.optimize(Buffer.from('not an image'), defaults), /読み取れません/);
+  const notImage = await service.optimize(Buffer.from('not an image'), defaults, 0, 'memo.txt', 'text/plain');
+  assert.equal(notImage.kind, 'file'); assert.equal(notImage.name, 'memo.txt'); assert.deepEqual(notImage.data, Buffer.from('not an image'));
 });
 
 test('画像取得と最適化は旧ファイルサイズ設定で投稿を拒否しない',async()=>{
@@ -51,17 +52,22 @@ test('画像キューは同時実行を制限し、満杯時は分かるエラ�
   release(); await Promise.all([first, second]); assert.equal(maximum, 1);
 });
 test('URL判定は正規のドメインだけをXとして扱い、無効なサービスを取得前に拒否する', async () => {
+  const image = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#3366cc' } }).png().toBuffer();
   class StubHttp extends SafeHttp {
     calls: string[] = [];
     override async json<T>(url: string): Promise<T> { this.calls.push(url); return { tweet: { media: { all: [{ type: 'photo', url: 'https://pbs.twimg.com/a.jpg' }, { type: 'video', url: 'https://video.twimg.com/a.mp4' }] } } } as T; }
+    override async get(url: string) { return { data: image, contentType: 'image/png', url }; }
   }
   const http = new StubHttp(); const service = new MediaService(http);
   const result = await service.resolve('https://x.com/example/status/123?s=20', defaults);
-  assert.equal(result.provider, 'x'); assert.equal(result.media.length, 1); assert.equal(result.source, 'https://x.com/example/status/123'); assert.equal(result.warnings.length, 1);
+  assert.equal(result.provider, 'x'); assert.equal(result.media.length, 2); assert.equal(result.source, 'https://x.com/example/status/123'); assert.equal(result.warnings.length, 0);
+  const fromUrl = await service.fromUrl('https://x.com/example/status/123?s=20', defaults);
+  assert.equal(fromUrl.files.length, 1); assert.equal(fromUrl.videoLinks.length, 1);
+  assert.equal(fromUrl.videoLinks[0], 'https://x-p.yexe.xyz/a.mp4');
   const disabled = structuredClone(defaults); disabled.content.providers = ['pixiv'];
   await assert.rejects(service.resolve('https://x.com/example/status/123', disabled), /無効/);
   const fake = await service.resolve('https://x.com.evil.example/example/status/123', defaults);
-  assert.equal(fake.provider, 'direct'); assert.equal(http.calls.length, 1);
+  assert.equal(fake.provider, 'direct');
 });
 
 test('取得先の応答形式変更・JSON不正は入力項目の英語エラーではなく次の操作を案内する',async()=>{
@@ -79,10 +85,11 @@ test('一部画像の取得失敗は元の番号で案内し、取得できた�
   }
   const result=await new MediaService(new PartialHttp()).fromUrl('https://www.pixiv.net/artworks/123',defaults);
   assert.equal(result.files.length,1);assert.ok(result.files[0]!.name.startsWith('image_1.'));
-  assert.ok(result.warnings[0]!.includes('元の画像1'));assert.ok(result.warnings[1]!.includes('元の画像3'));
+  assert.ok(result.warnings[0]!.includes('元のファイル1'));assert.ok(result.warnings[1]!.includes('元のファイル3'));
 });
 
 test('Pixiv・Bluesky・Mastodonの公開画像をそれぞれの応答から抽出する',async()=>{
+  const image=await sharp({create:{width:8,height:8,channels:3,background:'#2266cc'}}).png().toBuffer();
   class ProviderHttp extends SafeHttp {
     nested=false;
     override async json<T>(url:string):Promise<T>{
@@ -91,6 +98,7 @@ test('Pixiv・Bluesky・Mastodonの公開画像をそれぞれの応答から抽
       if(url.includes('getPosts')){const images={images:[{fullsize:'https://cdn.bsky.app/image.png'}]};return {posts:[{embed:this.nested?{media:images}:images}]} as T;}
       return {visibility:'public',media_attachments:[{type:'image',url:null,remote_url:'https://cdn.example.com/photo.png'},{type:'video',url:'https://cdn.example.com/video.mp4'}]} as T;
     }
+    override async get(url:string){return url.endsWith('.mp4') ? {data:Buffer.from('fakevideo'),contentType:'video/mp4',url} : {data:image,contentType:'image/png',url};}
   }
   const http=new ProviderHttp();const service=new MediaService(http);
   const pixiv=await service.resolve('https://www.pixiv.net/en/artworks/123',defaults);
@@ -99,7 +107,9 @@ test('Pixiv・Bluesky・Mastodonの公開画像をそれぞれの応答から抽
   assert.equal(bluesky.provider,'bluesky');assert.equal(bluesky.media[0]!.url,'https://cdn.bsky.app/image.png');
   http.nested=true;assert.equal((await service.resolve('https://bsky.app/profile/did:plc:example/post/abc',defaults)).media.length,1);
   const mastodon=await service.resolve('https://mastodon.example/@someone/123',defaults);
-  assert.equal(mastodon.provider,'mastodon');assert.equal(mastodon.media.length,1);assert.equal(mastodon.warnings.length,1);
+  assert.equal(mastodon.provider,'mastodon');assert.equal(mastodon.media.length,2);assert.equal(mastodon.warnings.length,0);
+  const mastodonPost=await new MediaService(http).fromUrl('https://mastodon.example/@someone/123',defaults);
+  assert.equal(mastodonPost.files.length,2);assert.equal(mastodonPost.files[1]!.kind,'video');
 });
 
 test('Xのi/statusやトラッキング付きURLを投稿者の正規URLに変換する',async()=>{
@@ -127,6 +137,13 @@ test('Pixivの旧形式URLも作品ページの正規URLに変換する',async()
   assert.equal(result.source,'https://www.pixiv.net/artworks/999');assert.equal(result.media[0]!.kind,'image');
 });
 
+test('直接添付は画像以外のファイルも元の名前のまま受け付ける',async()=>{
+  class Http extends SafeHttp { override async get(url:string){return {data:Buffer.from('%PDF-1.4 test'),contentType:'application/pdf',url};} }
+  const files=await new MediaService(new Http()).attachments(['https://cdn.discordapp.com/ephemeral-attachments/1/2/document_(1).PDF'],defaults);
+  assert.equal(files.length,1);assert.equal(files[0]!.kind,'file');assert.ok(files[0]!.name.endsWith('.PDF'));
+  assert.deepEqual(files[0]!.data,Buffer.from('%PDF-1.4 test'));
+});
+
 test('Misskeyの公開投稿の画像を取得し、非公開は拒否する',async()=>{
   class MisskeyHttp extends SafeHttp {
     constructor(private visibility='public'){super();}
@@ -138,6 +155,10 @@ test('Misskeyの公開投稿の画像を取得し、非公開は拒否する',as
   const service=new MediaService(new MisskeyHttp());
   const result=await service.resolve('https://misskey.io/notes/note123',defaults);
   assert.equal(result.provider,'misskey');assert.equal(result.source,'https://misskey.io/notes/note123');
-  assert.equal(result.media.length,1);assert.equal(result.warnings.length,1);
+  assert.equal(result.media.length,2);assert.equal(result.warnings.length,0);
+  const image=await sharp({create:{width:8,height:8,channels:3,background:'#2266cc'}}).png().toBuffer();
+  class DownloadHttp extends MisskeyHttp { override async get(url:string){return url.endsWith('.webm') ? {data:Buffer.from('fakewebm'),contentType:'video/webm',url} : {data:image,contentType:'image/png',url};} }
+  const posted=await new MediaService(new DownloadHttp()).fromUrl('https://misskey.io/notes/note123',defaults);
+  assert.equal(posted.files.length,2);assert.equal(posted.files[1]!.kind,'video');assert.equal(posted.files[1]!.name,'b.webm');
   await assert.rejects(new MediaService(new MisskeyHttp('followers')).resolve('https://misskey.io/notes/note123',defaults),/公開された投稿/);
 });

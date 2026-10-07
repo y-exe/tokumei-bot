@@ -32,7 +32,7 @@ export class Posting {
     const reply=input.replyTo?await this.store.post(input.guildId,input.channelId,input.replyTo):null;
     if (input.replyTo && !reply) throw new UserError('返信先が削除済みか保存期限を過ぎています。');
     const linked=settings.config.policy.retentionDays===0?input.text:await this.linkReferences(input.text,input.guildId,input.channelId,new Date());
-    const content = postContent(linked, input.source, input.replyTo, input.guildId, input.channelId,reply?.anonymous_id);
+    const content = postContent(linked, input.source, input.replyTo, input.guildId, input.channelId,reply?.anonymous_id, input.videoLinks);
     if (content.length > 2000) throw new UserError('出典・返信リンクを含めて2000文字以内になるように本文を短くしてください。');
     if(settings.config.policy.retentionDays===0)return this.publishWithoutLog(input,settings.config,settings.webhook,content);
     const reserved = await this.store.reserve(input, settings.config, settings.webhook);
@@ -130,7 +130,7 @@ export class Posting {
       const linked=settings.config.policy.retentionDays===0?content:await this.linkReferences(content,guildId,channelId,post.created_at);
       const reply=post.reply_to?await this.store.post(guildId,channelId,post.reply_to):null;
       const previousNumber=message.content?.match(/^\[>>(\d{1,4})\]/)?.[1];
-      const rendered = post.layout === 'legacy' ? linked : postContent(linked, post.source ?? undefined, post.reply_to ?? undefined, guildId, channelId,reply?.anonymous_id??(previousNumber?Number(previousNumber):undefined));
+      const rendered = post.layout === 'legacy' ? linked : postContent(linked, post.source ?? undefined, post.reply_to ?? undefined, guildId, channelId,reply?.anonymous_id??(previousNumber?Number(previousNumber):undefined), post.videoLinks);
       if (post.layout !== 'v2' && rendered.length > 2000) throw new UserError('出典・返信リンクを含めて2000文字以内にしてください。');
       await webhook.editMessage(messageId, post.layout !== 'v2' ? { content: rendered,
         allowedMentions: { parse: [] } } : { components: [postCard(rendered, post.media, settings.config.panel.color)],

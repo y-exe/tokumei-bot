@@ -108,7 +108,7 @@ export class App {
         if (!settings.enabled || !settings.config.content.images) throw new UserError('このチャンネルでは画像投稿を利用できません。');
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const attachment = interaction.options.getAttachment('file') ?? interaction.options.getAttachment('attachment');
-        if (!attachment) throw new UserError('投稿する画像を添付してください。');
+        if (!attachment) throw new UserError('投稿するファイルを添付してください。');
         const files = await this.media.attachments([attachment.url], settings.config);
         await this.send(interaction, interaction.options.getString('text') ?? interaction.options.getString('content') ?? '', files); return;
       }
@@ -118,9 +118,9 @@ export class App {
       }
     }
   }
-  async send(interaction: UIInteraction, content: string, media: PostInput['media'], source?: string, replyTo?: string): Promise<void> {
+  async send(interaction: UIInteraction, content: string, media: PostInput['media'], source?: string, replyTo?: string, videoLinks?: string[]): Promise<void> {
     const link = await this.posting.publish({ operationId: interaction.id, guildId: interaction.guildId!, channelId: interaction.channelId!,
-      userId: interaction.user.id, roles: this.roles(interaction), text: content, media, source, replyTo });
+      userId: interaction.user.id, roles: this.roles(interaction), text: content, media, source, replyTo, videoLinks });
     let notice = '';
     try { await this.panels.bump(interaction.guildId!, interaction.channelId!); }
     catch { notice = '\n案内の再送に失敗しました。投稿は送信済みです。管理者に案内の権限を確認してもらってください。'; }
@@ -134,7 +134,7 @@ export class App {
     if (!settings.config.content.caption && content.trim()) throw new UserError('このチャンネルでは画像に説明文を付けられません。');
     const result = await this.media.fromUrl(url, settings.config);
     const session: PreviewSession = { owner: interaction.user.id, guildId: interaction.guildId!, channelId: interaction.channelId!,
-      files: result.files, source: result.source, text: content, warnings: result.warnings, selected: result.files.map((_, index) => index), sending: false };
+      files: result.files, source: result.source, text: content, warnings: result.warnings, selected: result.files.map((_, index) => index), sending: false, videoLinks: result.videoLinks };
     const id = this.previews.create(session, result.files.reduce((sum, file) => sum + file.data.length, 0));
     await interaction.editReply({ ...payload(previewView(id, session, settings.config.content.caption)), flags: MessageFlags.IsComponentsV2,
       files: session.files.map(file => new AttachmentBuilder(file.data, { name: file.name })) });
@@ -169,7 +169,7 @@ export class App {
       if (action === 'send') {
         session.sending = true;
         await interaction.deferUpdate();
-        try { await this.send(interaction, session.text, session.selected.map(index => session.files[index]!), session.source); this.previews.delete(id); }
+        try { await this.send(interaction, session.text, session.selected.map(index => session.files[index]!), session.source, undefined, session.videoLinks); this.previews.delete(id); }
         catch (error) { session.sending = false; throw error; }
         return;
       }
@@ -376,7 +376,7 @@ export class App {
         case 'images': editSection(copy, 'panel', { image: field('image'), thumbnail: field('thumbnail') }); break;
         case 'labels': editSection(copy, 'panel', { textLabel: field('textLabel'), imageLabel: field('imageLabel'), urlLabel: field('urlLabel'), helpLabel: field('helpLabel'), ...(field('urlLabel')!==editorConfig(copy).panel.urlLabel?{urlAutoLabel:false}:{}) }); break;
         case 'rules': editSection(copy, 'policy', { rules: field('rules'), rulesUrl: field('rulesUrl') }); break;
-        case 'limits': editSection(copy, 'content', { maxFiles: Number(field('maxFiles')) }); editSection(copy, 'policy', { cooldown: Number(field('cooldown')) }); editSection(copy, 'moderation', { reportThreshold: Number(field('threshold')) }); break;
+        case 'limits': editSection(copy, 'policy', { cooldown: Number(field('cooldown')) }); editSection(copy, 'moderation', { reportThreshold: Number(field('threshold')) }); break;
         case 'identity': {
           if (!['on', 'off'].includes(selected('showId').toLowerCase())) throw new UserError('匿名IDの表示を選択してください。');
           editSection(copy, 'identity', { showId: selected('showId').toLowerCase() === 'on', minutes: Number(field('minutes')) });

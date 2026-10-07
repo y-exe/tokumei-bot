@@ -32,9 +32,10 @@ test('禁止語の正規化、禁止ドメインのサブドメイン、メン�
   assert.throws(() => validatePost(input, config), /ロール/);
   assert.doesNotThrow(() => validatePost({ ...input, roles: ['500000000000000001'] }, config));
 });
-test('画像上限・アニメーション・本文上限を共通検査で拒否する', () => {
-  assert.throws(() => validatePost({ ...input, media: Array(6).fill(image) }, defaults), /5枚/);
-  assert.throws(() => validatePost({ ...input, media: [{ ...image, kind: 'animation' }] }, defaults), /動く画像/);
+test('Discord上限を超える添付は拒否し、アニメーションや動画は種類を問わず受け付ける', () => {
+  assert.throws(() => validatePost({ ...input, media: Array(11).fill(image) }, defaults), /10個/);
+  assert.doesNotThrow(() => validatePost({ ...input, media: Array(10).fill(image) }, defaults));
+  assert.doesNotThrow(() => validatePost({ ...input, media: [{ ...image, kind: 'animation' }, { ...image, kind: 'video' }, { ...image, kind: 'file' }] }, defaults));
   assert.throws(() => validateText('a'.repeat(1801), defaults), /1800/);
 });
 test('設定は深い継承、厳密なインポート、秘密情報排除を行う', () => {
