@@ -64,7 +64,7 @@ export class App {
       let message = errorMessage(error);
       if (error instanceof ZodError) message = error.issues.map(issue => issue.message).slice(0, 3).join('\n');
       if (!(error instanceof UserError) && !(error instanceof ZodError)) {
-        console.error('interaction failed', { kind: error instanceof Error ? error.name : 'unknown', interactionId: interaction.id });
+        console.error('操作を処理できませんでした', { kind: error instanceof Error ? error.name : 'unknown', interactionId: interaction.id });
       }
       if (interaction.replied && !interaction.deferred) await interaction.followUp(payload([card('操作を確認してください', message, colors.danger)])).catch(() => undefined);
       else await this.respond(interaction, [card('操作を確認してください', message, colors.danger)]).catch(() => undefined);
