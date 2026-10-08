@@ -4,7 +4,7 @@ import type { Config, Provider } from '../domain/config.js';
 import { providerNames } from '../domain/config.js';
 import { UserError } from '../domain/errors.js';
 import type { MediaFile } from '../domain/validation.js';
-import { SafeHttp, WorkQueue } from './http.js';
+import { SafeHttp, WorkQueue, MAX_DOWNLOAD_BYTES } from './http.js';
 
 export interface MediaSource { url: string; kind: 'image' | 'animation' | 'video'; headers?: Record<string, string>; }
 export interface ResolvedMedia { provider: Provider; source: string; media: MediaSource[]; warnings: string[]; }
@@ -73,7 +73,7 @@ export class MediaService {
     return this.queue.run(async () => {
       const result: MediaFile[] = [];
       for (const url of urls) {
-        const response = await this.http.get(url, Number.POSITIVE_INFINITY);
+        const response = await this.http.get(url, MAX_DOWNLOAD_BYTES);
         result.push(await this.optimize(response.data, config, result.length, fileNameFromUrl(url), response.contentType));
       }
       return result;
@@ -106,16 +106,17 @@ export class MediaService {
     if (!config.content.providers.includes(provider)) throw new UserError('このサイトのURL変換はサーバー設定で無効になっています。');
     if (provider === 'x') {
       const unknownUser = url.pathname.match(/^\/i\/(?:web\/)?status\/(\d+)\/?$/);
-      const match = unknownUser ? ([url.pathname, 'i', unknownUser[1]!] as unknown as RegExpMatchArray)
-        : url.pathname.match(/^\/([\w]+)\/status\/(\d+)(?:\/[^/?]*)?\/?$/);
-      if (!match) throw new UserError('Xの投稿URLを入力してください。');
-      source = `https://x.com/${match[1]}/status/${match[2]}`;
+      const namedPost = url.pathname.match(/^\/([\w]+)\/status\/(\d+)(?:\/[^/?]*)?\/?$/);
+      const handle = unknownUser ? 'i' : namedPost?.[1];
+      const postId = unknownUser?.[1] ?? namedPost?.[2];
+      if (!handle || !postId) throw new UserError('Xの投稿URLを入力してください。');
+      source = `https://x.com/${handle}/status/${postId}`;
       for (const api of ['api.fxtwitter.com', 'api.fixupx.com']) {
         try {
-          const data = xResponse.parse(await this.http.json(`https://${api}/status/${match[2]}`));
+          const data = xResponse.parse(await this.http.json(`https://${api}/status/${postId}`));
           media = (data.tweet?.media?.all ?? []).map(item => ({ url: item.url, kind: item.type === 'photo' ? 'image' : item.type === 'gif' ? 'animation' : 'video' }));
           const handle = [data.tweet?.author?.screen_name, data.tweet?.author?.username].find(value => /^@?[\w]{1,20}$/.test(value ?? ''));
-          if (handle) source = `https://x.com/${handle.replace(/^@/, '')}/status/${match[2]}`;
+          if (handle) source = `https://x.com/${handle.replace(/^@/, '')}/status/${postId}`;
           if (media.length) break;
         } catch {}
       }

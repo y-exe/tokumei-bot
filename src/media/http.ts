@@ -20,6 +20,7 @@ export function isPublicAddress(address: string): boolean {
 }
 
 export interface HttpResult { data: Buffer; contentType: string; url: string; }
+export const MAX_DOWNLOAD_BYTES = 32 * 1024 * 1024;
 export class SafeHttp {
   async get(value: string, maxBytes: number, headers: Record<string, string> = {}, redirects = 0): Promise<HttpResult> {
     return this.request('GET', value, maxBytes, headers, undefined, redirects);
@@ -31,15 +32,23 @@ export class SafeHttp {
     catch { throw new UserError('取得先から画像情報を読み取れませんでした。画像を直接添付してください。'); }
   }
   private async request(method: 'GET' | 'POST', value: string, maxBytes: number, headers: Record<string, string> = {}, body: string | undefined, redirects = 0): Promise<HttpResult> {
+    maxBytes = Math.min(maxBytes, MAX_DOWNLOAD_BYTES);
+    if (!(maxBytes > 0)) throw new UserError('取得サイズの上限が不正です。');
     let url: URL;
     try { url = new URL(value); } catch { throw new UserError('URLの形式を確認してください。'); }
     if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443'))
       throw new UserError('取得できるのは認証情報を含まないHTTPSのURLです。');
     const host = url.hostname.replace(/^\[|\]$/g, '');
-    const addresses = isIP(host) ? [{ address: host, family: isIP(host) }] :
-      await Promise.race([lookup(host, { all: true }), new Promise<never>((_, reject) => {
-        const timer = setTimeout(() => reject(new UserError('接続先の確認がタイムアウトしました。')), 5000); timer.unref();
-      })]);
+    let dnsTimer: ReturnType<typeof setTimeout> | undefined;
+    const addresses = await (async () => {
+      try {
+        return isIP(host) ? [{ address: host, family: isIP(host) }] :
+          await Promise.race([lookup(host, { all: true }), new Promise<never>((_, reject) => {
+            dnsTimer = setTimeout(() => reject(new UserError('接続先の確認がタイムアウトしました。')), 5000);
+            dnsTimer.unref();
+          })]);
+      } finally { clearTimeout(dnsTimer); }
+    })();
     if (!addresses.length || addresses.some(item => !isPublicAddress(item.address)))
       throw new UserError('このURLの接続先は許可されていません。');
     const pinned = addresses[0]!;
@@ -54,7 +63,9 @@ export class SafeHttp {
         if (response.statusCode && [301, 302, 303, 307, 308].includes(response.statusCode)) {
           response.resume();
           if (!response.headers.location || redirects >= 3) { reject(new UserError('URLの転送が多すぎるため取得できません。')); return; }
-          resolve({ redirect: new URL(response.headers.location, url).href }); return;
+          try { resolve({ redirect: new URL(response.headers.location, url).href }); }
+          catch { reject(new UserError('取得先の転送URLが不正です。')); }
+          return;
         }
         if (response.statusCode !== 200) {
           response.resume(); reject(new UserError('画像を取得できませんでした。公開状態を確認するか、画像を直接添付してください。')); return;

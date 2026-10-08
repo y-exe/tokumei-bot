@@ -1,11 +1,40 @@
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
+import https from 'node:https';
+import { syncBuiltinESMExports } from 'node:module';
+import { EventEmitter } from 'node:events';
 import assert from 'node:assert/strict';
 import sharp from 'sharp';
 import { defaults } from '../src/domain/config.js';
-import { isPublicAddress, SafeHttp, WorkQueue } from '../src/media/http.js';
+import { isPublicAddress, SafeHttp, WorkQueue, MAX_DOWNLOAD_BYTES } from '../src/media/http.js';
 import { MediaService } from '../src/media/service.js';
 import { UserError } from '../src/domain/errors.js';
 import { randomBytes } from 'node:crypto';
+
+test('無制限指定でも巨大な応答を拒否し、不正な転送URLでプロセスを落とさない', async () => {
+  let malformedRedirect = false;
+  const requestMock = mock.method(https, 'request', (_url: unknown, _options: unknown, callback: (response: unknown) => void) => {
+    const req = new EventEmitter() as EventEmitter & { end(): void; destroy(error: Error): void };
+    req.destroy = error => { req.emit('error', error); req.emit('close'); };
+    req.end = () => queueMicrotask(() => {
+      try {
+        callback(malformedRedirect
+          ? { statusCode: 302, headers: { location: 'https://[' }, resume() {} }
+          : { statusCode: 200, headers: { 'content-length': String(MAX_DOWNLOAD_BYTES + 1) }, destroy() {} });
+      } finally { req.emit('close'); }
+    });
+    return req;
+  });
+  syncBuiltinESMExports();
+  try {
+    const http = new SafeHttp();
+    await assert.rejects(http.get('https://1.1.1.1/file', Infinity), /大きすぎ/);
+    malformedRedirect = true;
+    await assert.rejects(http.get('https://1.1.1.1/file', 1000), /転送URLが不正/);
+  } finally {
+    requestMock.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
 
 test('画像取得は内部IP・特殊アドレス・認証URL・非HTTPSを拒否する', async () => {
   for (const ip of ['127.0.0.1', '10.0.0.1', '172.16.0.1', '192.168.1.1', '169.254.169.254', '100.64.0.1', '::1', 'fc00::1', 'fe80::1', '::ffff:127.0.0.1', '2001:db8::1']) assert.equal(isPublicAddress(ip), false, ip);
@@ -31,14 +60,14 @@ test('画像取得と最適化は旧ファイルサイズ設定で投稿を拒�
     override async get(url:string,maxBytes:number){byteLimit=maxBytes;return {data:source,contentType:'image/png',url};}
   }
   const files=await new MediaService(new ImageHttp()).attachments(['https://example.com/image.png'],config);
-  assert.equal(byteLimit,Number.POSITIVE_INFINITY);assert.equal(files.length,1);assert.ok(files[0]!.data.length>0);
+  assert.equal(byteLimit,MAX_DOWNLOAD_BYTES);assert.equal(files.length,1);assert.ok(files[0]!.data.length>0);
 });
 
 test('旧10MB上限を超える実画像を取得して最適化できる',async()=>{
   const source=await sharp(randomBytes(2048*2048*3),{raw:{width:2048,height:2048,channels:3}}).png({compressionLevel:0}).toBuffer();
   assert.ok(source.length>10*1024*1024);
   class LargeHttp extends SafeHttp {
-    override async get(url:string,maxBytes:number){assert.equal(maxBytes,Number.POSITIVE_INFINITY);return {data:source,contentType:'image/png',url};}
+    override async get(url:string,maxBytes:number){assert.equal(maxBytes,MAX_DOWNLOAD_BYTES);return {data:source,contentType:'image/png',url};}
   }
   const files=await new MediaService(new LargeHttp()).attachments(['https://example.com/large.png'],defaults);
   assert.equal(files.length,1);assert.ok(files[0]!.data.length>0);

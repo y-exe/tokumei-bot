@@ -7,7 +7,7 @@
   [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-316192?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
   [![License GPL v3](https://img.shields.io/badge/LICENSE-GPL%20v3-green.svg?style=flat-square)](LICENSE)
 </h1>
-新規参入、活発化のために作られたDiscord上に完全匿名チャットを実装するBot!!<br>
+Discordサーバーに匿名投稿機能を追加するBotです。<br>
 <br>
 
 <img src="public/about.png" alt="about">
@@ -28,9 +28,9 @@
 ## 軽い説明
 
 このBotは、Discordサーバー内に匿名掲示板のような機能を追加するためのBotです。  
-ユーザーは**完全匿名でメッセージを投稿**でき、投稿者は他のユーザーには分かりません。  
+投稿者のDiscordアカウントは通常の投稿表示には出ません。投稿ログの保存が有効な場合、Botは投稿とユーザーIDの対応を保存します。DB管理者やBot管理者は保存された情報を確認できるため、完全な匿名性を保証するものではありません。
 「匿名つぶやきモード」と「匿名要望モード」の2つの運用形態をサポートしています。  
-処罰等をしたい場合なども、**Bot経由で処罰が実行されるため、サーバー運営者にも誰かわかることはありません!!**  
+通報・処罰はBot経由で行い、サーバー管理者向けの操作画面には匿名投稿者のDiscordユーザーIDを表示しません。
 
 ## 特徴など...
 
