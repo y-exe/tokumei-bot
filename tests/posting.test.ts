@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { PGLiteSocketServer } from '@electric-sql/pglite-socket';
-import { MessageFlags, WebhookClient } from 'discord.js';
+import { DiscordAPIError, MessageFlags, WebhookClient, type TextChannel } from 'discord.js';
 import { Store } from '../src/infra/store.js';
 import { SecretBox } from '../src/infra/secrets.js';
 import { Posting } from '../src/services/posting.js';
@@ -168,4 +168,30 @@ test('保存0の番号と見た目は再起動しても続き、色は直前の�
   const options=sent.slice(before) as {avatarURL:string;username:string}[];
   assert.equal(options[0]!.username,'匿名 004');
   assert.notEqual(options[0]!.avatarURL,(sent.slice(0,before).at(-1) as {avatarURL:string}).avatarURL);
+});
+
+test('保存0の送信拒否では具体的な理由を表示し、同じ操作を再送しない',async()=>{
+  const output=mock.method(console,'error',()=>{});
+  const send=mock.method(WebhookClient.prototype,'send',async()=>{throw new DiscordAPIError({code:10015,message:'Unknown Webhook'},10015,404,'POST','https://discord.com/api/webhooks/secret',{});});
+  const input={...post('no-log-rejected'),channelId:'200000000000000011'};
+  try{
+    await assert.rejects(posting.publish(input),/投稿用Webhookが削除された/);
+    await assert.rejects(posting.publish(input),/処理済み/);
+    assert.equal(send.mock.calls.length,1);
+    assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM v2_posts WHERE operation_id=$1',[input.operationId])).rows[0].n,0);
+  }finally{send.mock.restore();output.mock.restore();}
+});
+
+test('再設置では有効なWebhookを維持し、削除済みだけを作り直す',async()=>{
+  const credential=(await store.settings(guild,channel,true)).webhook!;
+  let creates=0;let failure:Error|undefined;
+  const destination={id:channel,guild:{id:guild},client:{fetchWebhook:async()=>{if(failure)throw failure;return {channelId:channel};}},createWebhook:async()=>{creates++;return {url:`https://discord.com/api/webhooks/500000000000000012/${'b'.repeat(68)}`};}} as unknown as TextChannel;
+  assert.equal(await posting.createWebhook(destination),credential);assert.equal(creates,0);
+  failure=new DiscordAPIError({code:10015,message:'Unknown Webhook'},10015,404,'GET','https://discord.com/api/webhooks/secret',{});
+  const replacement=await posting.createWebhook(destination);
+  assert.match(secrets.open(replacement),/500000000000000012/);assert.equal(creates,1);
+  failure=new Error('timeout');
+  await assert.rejects(posting.createWebhook(destination),/timeout/);assert.equal(creates,1);
+  failure=new DiscordAPIError({code:50013,message:'Missing Permissions'},50013,403,'GET','https://discord.com/api/webhooks/secret',{});
+  await assert.rejects(posting.createWebhook(destination),/Missing Permissions/);assert.equal(creates,1);
 });

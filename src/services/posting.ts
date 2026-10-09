@@ -1,4 +1,4 @@
-import { AttachmentBuilder, WebhookClient, type TextChannel } from 'discord.js';
+import { AttachmentBuilder, DiscordAPIError, HTTPError, WebhookClient, type TextChannel } from 'discord.js';
 import type { Store, StoredPost } from '../infra/store.js';
 import type { SecretBox } from '../infra/secrets.js';
 import { UserError } from '../domain/errors.js';
@@ -8,6 +8,7 @@ import type { Config } from '../domain/config.js';
 import { SerialQueue } from '../infra/serial.js';
 import { nextAvatar } from '../domain/avatar.js';
 import {isRequestMode} from '../domain/config.js';
+import { deliveryError } from './delivery-error.js';
 
 export class Posting {
   private queue = new SerialQueue(Number.POSITIVE_INFINITY);
@@ -49,7 +50,7 @@ export class Posting {
       return `https://discord.com/channels/${input.guildId}/${input.channelId}/${sent.id}`;
     } catch (error) {
       await this.store.markUncertain(input.operationId, delivery).catch(() => undefined);
-      throw new UserError('送信結果を確認できませんでした。二重投稿を防ぐため再送せず、/mine の「送信結果を確認」から確認してください。');
+      throw deliveryError(error, false);
     } finally { webhook.destroy(); }
   }
   async linkReferences(content:string,guildId:string,channelId:string,before:Date):Promise<string>{
@@ -82,7 +83,7 @@ export class Posting {
     try{
       const sent=await webhook.send({username:config.identity.showId?`匿名 ${String(anonymousId).padStart(3,'0')}`:'匿名',avatarURL:`https://cdn.discordapp.com/embed/avatars/${avatar}.png`,content:content||undefined,allowedMentions:{parse:[]},files:input.media.map(file=>new AttachmentBuilder(file.data,{name:file.name}))});
       return `https://discord.com/channels/${input.guildId}/${input.channelId}/${sent.id}`;
-    }catch{throw new UserError('送信結果を確認できませんでした。このチャンネルは履歴を保存しないため、自動照合や再送は行いません。チャンネルを確認してください。');}
+    }catch(error){throw deliveryError(error, true);}
     finally{webhook.destroy();}
   }
   async reconcile(guildId: string, channelId: string, userId: string, operationId: string): Promise<string> {
@@ -157,7 +158,17 @@ export class Posting {
   }
   async createWebhook(channel: TextChannel): Promise<string> {
     const settings = await this.store.settings(channel.guild.id, channel.id, true);
-    if (settings.webhook) return settings.webhook;
+    if (settings.webhook) {
+      const existing = new WebhookClient({ url: this.secrets.open(settings.webhook) });
+      try {
+        const webhook = await channel.client.fetchWebhook(existing.id, existing.token);
+        if (webhook.channelId !== channel.id) throw new UserError('投稿用Webhookの送信先が一致しません。管理者に設定を確認してもらってください。');
+        return settings.webhook;
+      } catch (error) {
+        if (!(error instanceof DiscordAPIError && (error.code === 10015 || error.code === 50027)) &&
+            !((error instanceof DiscordAPIError || error instanceof HTTPError) && error.status === 401)) throw error;
+      } finally { existing.destroy(); }
+    }
     const webhook = await channel.createWebhook({ name: '匿名投稿', reason: '匿名Botの初期設定' });
     if (!webhook.url) throw new UserError('Webhookを作成できませんでした。');
     return this.secrets.seal(webhook.url);
