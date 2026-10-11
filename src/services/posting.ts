@@ -9,6 +9,8 @@ import { SerialQueue } from '../infra/serial.js';
 import { nextAvatar } from '../domain/avatar.js';
 import {isRequestMode} from '../domain/config.js';
 import { deliveryError } from './delivery-error.js';
+import { checkMediaSafety } from '../media/safety-policy.js';
+import { SafeHttp, MAX_DOWNLOAD_BYTES } from '../media/http.js';
 
 export class Posting {
   private queue = new SerialQueue(Number.POSITIVE_INFINITY);
@@ -30,6 +32,11 @@ export class Posting {
     const settings = await this.store.settings(input.guildId, input.channelId, true);
     if (!settings.enabled || !settings.webhook) throw new UserError('このチャンネルには匿名投稿が設置されていません。');
     validatePost(input, settings.config);
+    for (const file of input.media) await checkMediaSafety(file.data, settings.config, file.name);
+    for (const url of input.videoLinks ?? []) {
+      const response = await new SafeHttp().get(url, MAX_DOWNLOAD_BYTES);
+      await checkMediaSafety(response.data, settings.config, 'video.mp4', 'video/mp4');
+    }
     const reply=input.replyTo?await this.store.post(input.guildId,input.channelId,input.replyTo):null;
     if (input.replyTo && !reply) throw new UserError('返信先が削除済みか保存期限を過ぎています。');
     const linked=settings.config.policy.retentionDays===0?input.text:await this.linkReferences(input.text,input.guildId,input.channelId,new Date());

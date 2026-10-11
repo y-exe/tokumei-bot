@@ -53,6 +53,7 @@ export class MediaService {
       const metadata = await image.metadata();
       if (!['jpeg', 'png', 'webp', 'gif', 'avif'].includes(metadata.format ?? '')) return passthrough();
       const animated = (metadata.pages ?? 1) > 1;
+      if (animated) return { data, name: `image_${index + 1}.${metadata.format}`, kind: 'animation' };
       if ((metadata.width ?? 0) * (metadata.height ?? 0) > 40_000_000) return passthrough();
       const pipeline = image.rotate().resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true });
       const transparent = metadata.hasAlpha;

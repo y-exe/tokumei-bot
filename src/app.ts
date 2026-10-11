@@ -13,7 +13,7 @@ import type { MediaService } from './media/service.js';
 import { Posting } from './services/posting.js';
 import { Panels } from './services/panels.js';
 import { button, card, colors, help, panelPayload, payload, row, text } from './ui/components.js';
-import { editSection, editorConfig, editorModal, editorView, managementView, buttonSettingsView, type EditorSession } from './ui/editor.js';
+import { editSection, editorConfig, editorModal, editorView, managementView, buttonSettingsView, safetyView, type EditorSession } from './ui/editor.js';
 import { input, postModal } from './ui/modals.js';
 import { previewView, type PreviewSession } from './ui/post.js';
 import { Sessions } from './ui/sessions.js';
@@ -275,6 +275,7 @@ export class App {
       text: interaction.values.includes('text'), images: interaction.values.includes('images'), urls: interaction.values.includes('urls'),
       caption: interaction.values.includes('caption'), animation: interaction.values.includes('animation'),
     });
+    else if (action === 'safety' && interaction.isStringSelectMenu()) editSection(session, 'content', { allowNsfw: interaction.values.includes('nsfw'), allowNsfl: interaction.values.includes('nsfl') });
     else if (action === 'providers' && interaction.isStringSelectMenu()) editSection(session, 'content', { providers: interaction.values as Config['content']['providers'] });
     else if (action === 'roles' && interaction.isRoleSelectMenu()) editSection(session, 'moderation', { managerRoles: interaction.values });
     else if (action === 'directposts') editSection(session, 'moderation', { allowDirectPosts: !allowsDirectPosts(editorConfig(session)) });
@@ -283,9 +284,9 @@ export class App {
     else if (action === 'export') {
       await interaction.reply({ content: 'この下書きの設定です。Webhookなどの秘密情報は含まれません。', flags: MessageFlags.Ephemeral,
         files: [new AttachmentBuilder(Buffer.from(exportTemplate(session.value)), { name: 'anonymous.json' })] }); return;
-    } else if (!['back', 'management','buttons'].includes(action)) { await interaction.showModal(editorModal(id, action, editorConfig(session))); return; }
+    } else if (!['back', 'management','buttons','safetyview'].includes(action)) { await interaction.showModal(editorModal(id, action, editorConfig(session))); return; }
     const management = ['management', 'roles', 'allowedroles', 'reportchannel', 'logchannel', 'directposts'].includes(action);
-    await interaction.update({ components: action==='buttons'?buttonSettingsView(id,session):management ? managementView(id, session) : editorView(id, session), allowedMentions: emptyMentions });
+    await interaction.update({ components: ['safety','safetyview'].includes(action)?safetyView(id,session):action==='buttons'?buttonSettingsView(id,session):management ? managementView(id, session) : editorView(id, session), allowedMentions: emptyMentions });
   }
   async saveEditor(interaction: UIInteraction, id: string, session: EditorSession): Promise<void> {
     const channel = await this.channel(session.guildId, session.channelId);

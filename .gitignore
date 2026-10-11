@@ -12,3 +12,4 @@ coverage/
 .local/
 logs/
 detas/
+models/

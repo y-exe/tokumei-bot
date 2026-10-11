@@ -65,3 +65,20 @@ Discordサーバーに匿名投稿機能を追加するBotです。<br>
 ---
 
 © 2026 yexe
+# ローカル画像・動画の安全判定
+
+`bun install` 後、`ffmpeg` と `ffprobe` をPATHに配置してください（Dockerイメージには同梱）。Bot起動時に一度だけCPU用の `onnxruntime-node` セッションを作ります。Pythonや画像判定の外部APIは使用しません。モデルがない初回起動ではHugging Faceから自動取得するため通信が必要です。以後の推論はローカルです。
+
+手動配置する場合は、[モデルの固定リビジョン](https://huggingface.co/OwenElliott/image-safety-classifier-xs/tree/54f4560bd9c5ee92d45dc30418a8f8680e80de6d) の `config.json` と `onnx/image-safety-classifier-xs.onnx` をそれぞれ `models/image-safety-xs/config.json` と `models/image-safety-xs/model.onnx` に置いてください。`SAFETY_MODEL_DIR` で配置先を変更できます。コンテナではこのディレクトリを永続化すると再起動時の再取得を避けられます。
+
+このリビジョンには `preprocessor_config.json` がありません。configの `pretrained_cfg.label_names` を読み込み、ラベルを対応付けます。実ONNXを確認した入出力は `image`（float32、バッチ1、RGB CHW、224×224）と `probabilities`（3分類）です。[ONNX版の仕様](https://huggingface.co/OwenElliott/image-safety-classifier-xs) に従い、RGBに変換してbilinearで224×224に伸縮し、0〜255で入力します。グラフ内に255除算、平均・標準偏差による正規化、Softmaxが含まれるため二重適用しません。通常のtimm版のbicubic・中心クロップとは異なります。モデルを置き換える際はこの仕様を再確認してください。
+
+`src/media/safety.ts` の `classifyImage(Buffer | string)` は `{ sfw, nsfw, nsfl, label }` を返します。URL取得には既存の公開HTTPS限定・サイズ制限付きダウンローダーを使用します。JPEG/PNG/GIF/WebPに対応し、単体APIではアニメーションの先頭フレームを判定します。投稿時はアニメーションも約5秒ごとに判定します。
+
+`/setup` と `/settings` の「画像・動画の安全設定」でNSFW（エロ・性的表現）とNSFL（グロ・流血）を個別に許可できます。初期値と旧設定は両方拒否です。実写／二次元や裸／性的行為の細分類はこのモデルの出力にないため区別しません。一般添付、画像URL、X動画リンクを含め送信直前の現在設定で検査します。非画像・非動画ファイルは従来通りです。
+
+動画は先頭と約5秒ごとのフレームを逐次判定します。最大10分、解析タイムアウト120秒、取得上限32MiBです。`FFMPEG_PATH` / `FFPROBE_PATH` で実行ファイルを指定できます。壊れた画像・動画や判定失敗は拒否します。サンプリング間の短い場面やモデルの誤判定は検出できないことがあります。
+
+メモリ優先でsharpキャッシュ無効、sharp並列数1、CPU推論スレッド1、推論同時数1、CPUメモリアリーナ・メモリパターン無効です。モデルロード時と各推論時にRSS（MiB）・所要時間・ラベルをログに出します。低メモリ環境では `MEDIA_CONCURRENCY=1` も設定してください。
+
+検証は `bun run check` と `bun run test`。実画像4分類の確認は、管理者が用意した成人のみの適法なサンプルを `sfw.jpg`、`nsfw-real.jpg`、`nsfw-anime.png`、`nsfl.jpg` として置き、`SAFETY_FIXTURES_DIR` にディレクトリを指定して `bunx tsx --test tests/safety.test.ts` を実行します。未指定の場合、この4件は明示的にスキップされます。サンプルはGitに追加しないでください。

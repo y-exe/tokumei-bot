@@ -7,3 +7,5 @@ coverage
 logs
 detas
 tests
+models
+.local-test-output.txt

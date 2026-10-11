@@ -22,7 +22,7 @@ export function editorView(id: string, session: EditorSession): ContainerBuilder
   const inherited = session.scope === 'channel' ? Object.keys(session.value).length ? 'このチャンネルの上書きを編集中' : 'サーバー標準を継承中' : 'サーバー内の継承チャンネルに反映されます';
   const menu = card('匿名Botの設定', `${session.scope === 'guild' ? 'サーバー標準' : `<#${session.channelId}>`} · ${inherited}\n変更は下書きです。「保存して反映」を押すまで公開されません。`, colors.settings);
   menu.addActionRowComponents(row(button(`cfg:${id}:appearance`, 'タイトル・説明'), button(`cfg:${id}:images`, '画像・サムネイル'), button(`cfg:${id}:buttons`, 'ボタン設定'), button(`cfg:${id}:display`, '表示・再送')));
-  menu.addActionRowComponents(row(button(`cfg:${id}:rules`, 'ルール'), button(`cfg:${id}:limits`, '枚数・制限'), button(`cfg:${id}:identity`, '匿名ID・保存期間'), button(`cfg:${id}:caption`, '画像の説明文')));
+  menu.addActionRowComponents(row(button(`cfg:${id}:rules`, 'ルール'), button(`cfg:${id}:limits`, '枚数・制限'), button(`cfg:${id}:identity`, '匿名ID・保存期間'), button(`cfg:${id}:safetyview`, '画像・動画の安全設定')));
   const options = [
     { label: 'テキストだけの投稿', value: 'text', description: '画像なしでも投稿できる' },
     { label: 'ファイルの直接添付', value: 'images', description: 'フォームから画像や動画などを選択できる' },
@@ -63,6 +63,16 @@ export function managementView(id: string, session: EditorSession): ContainerBui
   menu.addTextDisplayComponents(text('**処置ログ先**'));
   menu.addActionRowComponents(new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(log));
   menu.addActionRowComponents(row(button(`cfg:${id}:directposts`, `通常投稿: ${allowsDirectPosts(config) ? '許可' : '削除・DM警告'}`), button(`cfg:${id}:back`, 'プレビューに戻る', ButtonStyle.Primary)));
+  return [menu];
+}
+export function safetyView(id: string, session: EditorSession): ContainerBuilder[] {
+  const config = editorConfig(session);
+  const menu = card('画像・動画の安全設定', '未選択は拒否（初期値）。NSFWは性的表現、NSFLはグロ・流血です。実写とイラストは同じカテゴリで判定します。', colors.settings);
+  menu.addActionRowComponents(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder()
+    .setCustomId(`cfg:${id}:safety`).setPlaceholder('許可するカテゴリ').setMinValues(0).setMaxValues(2)
+    .addOptions({ label: 'NSFW（エロ・性的表現）を許可', value: 'nsfw', default: config.content.allowNsfw ?? false },
+      { label: 'NSFL（グロ・流血）を許可', value: 'nsfl', default: config.content.allowNsfl ?? false })));
+  menu.addActionRowComponents(row(button(`cfg:${id}:caption`, '画像の説明文'), button(`cfg:${id}:back`, 'プレビューに戻る')));
   return [menu];
 }
 export function buttonSettingsView(id:string,session:EditorSession):ContainerBuilder[] {

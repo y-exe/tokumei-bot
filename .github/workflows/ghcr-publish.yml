@@ -38,6 +38,9 @@ jobs:
       - name: Typecheck
         run: bun run check
 
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Test
         run: bun run test
 

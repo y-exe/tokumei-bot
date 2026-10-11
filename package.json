@@ -17,6 +17,7 @@
   "dependencies": {
     "discord.js": "14.27.0",
     "dotenv": "^17.2.3",
+    "onnxruntime-node": "^1.30.0",
     "pg": "^8.23.1",
     "sharp": "0.35.5",
     "zod": "^4.1.12"

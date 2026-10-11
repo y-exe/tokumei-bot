@@ -21,6 +21,7 @@ export const panelSchema = z.object({
   textLabel: label, imageLabel: label, urlLabel: label, helpLabel: label,
 }).strict();
 export const contentSchema = z.object({
+  allowNsfw: z.boolean().optional(), allowNsfl: z.boolean().optional(),
   text: z.boolean(), images: z.boolean(), urls: z.boolean(), caption: z.boolean(),
   animation: z.boolean(), video: z.boolean(),
   maxFiles: z.number().int().min(1).max(10),
