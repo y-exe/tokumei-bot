@@ -2,6 +2,7 @@ import sharp from 'sharp';
 import * as ort from 'onnxruntime-node';
 import { mkdir, access, readFile, writeFile, rename } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { SafeHttp, WorkQueue, MAX_DOWNLOAD_BYTES } from './http.js';
 
 export type SafetyLabel = 'SFW' | 'NSFW' | 'NSFL';
@@ -18,8 +19,9 @@ async function download(name: string, remote: string): Promise<void> {
   try { await access(path); return; } catch {}
   const response = await fetch(`https://huggingface.co/OwenElliott/image-safety-classifier-xs/resolve/${MODEL_REVISION}/${remote}`, { signal: AbortSignal.timeout(120_000) });
   if (!response.ok) throw new Error(`モデル取得失敗: ${response.status}`);
-  await writeFile(`${path}.tmp`, Buffer.from(await response.arrayBuffer()));
-  await rename(`${path}.tmp`, path);
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  await writeFile(temporary, Buffer.from(await response.arrayBuffer()));
+  await rename(temporary, path);
 }
 
 export function initializeSafety(): Promise<{ session: ort.InferenceSession; labels: SafetyLabel[] }> {

@@ -1,6 +1,6 @@
 import sharp from 'sharp';
 import * as ort from 'onnxruntime-node';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { access, mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { WorkQueue } from './http.js';
@@ -63,7 +63,8 @@ export async function prepareNudityModel(): Promise<void> {
   if (!response.ok) throw new Error(`部位検出モデル取得失敗: ${response.status}`);
   const data = Buffer.from(await response.arrayBuffer());
   if (createHash('sha256').update(data).digest('hex') !== checksum) throw new Error('部位検出モデルのチェックサム不一致');
-  await writeFile(`${path}.tmp`, data); await rename(`${path}.tmp`, path);
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  await writeFile(temporary, data); await rename(temporary, path);
 }
 
 export function initializeNudity(): Promise<{ session: ort.InferenceSession; labels: string[] }> {
