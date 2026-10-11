@@ -8,11 +8,18 @@ import type { Config } from '../domain/config.js';
 import { UserError } from '../domain/errors.js';
 import { classifyImage, type SafetyResult } from './safety.js';
 import { WorkQueue } from './http.js';
+import { detectBodyParts, exposesRestrictedParts } from './nudity.js';
 
 const queue = new WorkQueue(1, 10);
 export function enforceSafety(result: SafetyResult, config: Config): void {
   if ((result.label === 'NSFW' && !config.content.allowNsfw) || (result.label === 'NSFL' && !config.content.allowNsfl))
     throw new UserError(`このチャンネルでは${result.label === 'NSFW' ? '性的な画像・動画（NSFW）' : 'グロ・流血画像・動画（NSFL）'}を投稿できません。\n\n${result.label === 'NSFW' ? '性的な画像でない場合は管理者にお問い合わせください\nNSFW検知モデルの改善等致します' : 'グロ・流血画像でない場合は管理者にお問い合わせください\nNSFL検知モデルの改善等致します'}`);
+}
+
+async function checkFrame(data: Buffer, config: Config): Promise<void> {
+  const result = await classifyImage(data);
+  if (result.label === 'NSFL') enforceSafety(result, config);
+  if (!config.content.allowNsfw && exposesRestrictedParts(await detectBodyParts(data))) enforceSafety({ ...result, label: 'NSFW' }, config);
 }
 
 export async function checkMediaSafety(data: Buffer, config: Config, name = '', contentType = ''): Promise<void> {
@@ -25,13 +32,13 @@ export async function checkMediaSafety(data: Buffer, config: Config, name = '', 
       return;
     }
     try {
-      if (metadata && (metadata.pages ?? 1) === 1) { enforceSafety(await classifyImage(data), config); return; }
+      if (metadata && (metadata.pages ?? 1) === 1) { await checkFrame(data, config); return; }
       if (metadata) {
         let elapsed = 0; let next = 0;
         for (let page = 0; page < metadata.pages!; page++) {
           if (elapsed >= next) {
-            const frame = await sharp(data, { page, pages: 1, limitInputPixels: 40_000_000 }).resize(224, 224, { fit: 'fill', kernel: 'linear' }).png().toBuffer();
-            enforceSafety(await classifyImage(frame), config);
+            const frame = await sharp(data, { page, pages: 1, limitInputPixels: 40_000_000 }).resize(320, 320, { fit: 'inside', kernel: 'linear' }).png().toBuffer();
+            await checkFrame(frame, config);
             next = elapsed + 5000;
           }
           elapsed += Math.max(metadata.delay?.[page] ?? 100, 10);
@@ -46,7 +53,7 @@ export async function checkMediaSafety(data: Buffer, config: Config, name = '', 
         const probe = await promisify(execFile)(process.env.FFPROBE_PATH ?? 'ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', path], { timeout: 15_000, maxBuffer: 4096 });
         const duration = Number(probe.stdout.trim());
         if (!Number.isFinite(duration) || duration <= 0 || duration > 600) throw new Error('動画は10分以内にしてください');
-        const child = spawn(process.env.FFMPEG_PATH ?? 'ffmpeg', ['-v', 'error', '-threads', '1', '-filter_threads', '1', '-i', path, '-an', '-vf', 'select=isnan(prev_selected_t)+gte(t-prev_selected_t\\,5),scale=224:224', '-fps_mode', 'vfr', '-threads', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
+        const child = spawn(process.env.FFMPEG_PATH ?? 'ffmpeg', ['-v', 'error', '-threads', '1', '-filter_threads', '1', '-i', path, '-an', '-vf', 'select=isnan(prev_selected_t)+gte(t-prev_selected_t\\,5),scale=320:320:force_original_aspect_ratio=decrease,pad=320:320:0:0:black', '-fps_mode', 'vfr', '-threads', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'], { stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true });
         let frames = 0;
         let pending = Buffer.alloc(0);
         const completion = new Promise<void>((resolve, reject) => { child.once('error', reject); child.once('close', code => code === 0 ? resolve() : reject(new Error('動画デコード失敗'))); });
@@ -55,11 +62,11 @@ export async function checkMediaSafety(data: Buffer, config: Config, name = '', 
         try {
           for await (const chunk of child.stdout) {
             pending = Buffer.concat([pending, chunk as Buffer]);
-            const size = 224 * 224 * 3;
+            const size = 320 * 320 * 3;
             while (pending.length >= size) {
               const frame = pending.subarray(0, size); pending = pending.subarray(size);
-              const png = await sharp(frame, { raw: { width: 224, height: 224, channels: 3 } }).png().toBuffer();
-              enforceSafety(await classifyImage(png), config);
+              const png = await sharp(frame, { raw: { width: 320, height: 320, channels: 3 } }).png().toBuffer();
+              await checkFrame(png, config);
               if (++frames > 121) throw new Error('動画が長すぎます');
             }
           }

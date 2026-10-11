@@ -71,7 +71,7 @@ Discordサーバーに匿名投稿機能を追加するBotです。<br>
 
 Dockerではビルド時にモデルを取得して同梱するため、読み取り専用ルートでも起動できます。動画解析には書き込み可能な `/tmp` が必要です。Kubernetesではディスクの `emptyDir` を `/tmp` にマウントしてください。
 
-`bun install` 後、`ffmpeg` と `ffprobe` をPATHに配置してください（Dockerイメージには同梱）。Bot起動時に一度だけCPU用の `onnxruntime-node` セッションを作ります。Pythonや画像判定の外部APIは使用しません。モデルがない初回起動ではHugging Faceから自動取得するため通信が必要です。以後の推論はローカルです。
+`bun install` 後、`ffmpeg` と `ffprobe` をPATHに配置してください（Dockerイメージには同梱）。Bot起動時に一度だけ、グロ分類と部位検出それぞれのCPU用 `onnxruntime-node` セッションを作ります。Pythonや画像判定の外部APIは使用しません。モデルがない初回起動ではHugging Faceから自動取得するため通信が必要です。以後の推論はローカルです。
 
 手動配置する場合は、[モデルの固定リビジョン](https://huggingface.co/OwenElliott/image-safety-classifier-xs/tree/54f4560bd9c5ee92d45dc30418a8f8680e80de6d) の `config.json` と `onnx/image-safety-classifier-xs.onnx` をそれぞれ `models/image-safety-xs/config.json` と `models/image-safety-xs/model.onnx` に置いてください。`SAFETY_MODEL_DIR` で配置先を変更できます。コンテナではこのディレクトリを永続化すると再起動時の再取得を避けられます。
 
@@ -79,10 +79,14 @@ Dockerではビルド時にモデルを取得して同梱するため、読み�
 
 `src/media/safety.ts` の `classifyImage(Buffer | string)` は `{ sfw, nsfw, nsfl, label }` を返します。URL取得には既存の公開HTTPS限定・サイズ制限付きダウンローダーを使用します。JPEG/PNG/GIF/WebPに対応し、単体APIではアニメーションの先頭フレームを判定します。投稿時はアニメーションも約5秒ごとに判定します。
 
-`/setup` と `/settings` の「画像・動画の安全設定」でNSFW（エロ・性的表現）とNSFL（グロ・流血）を個別に許可できます。初期値と旧設定は両方拒否です。実写／二次元や裸／性的行為の細分類はこのモデルの出力にないため区別しません。一般添付、画像URL、X動画リンクを含め送信直前の現在設定で検査します。非画像・非動画ファイルは従来通りです。
+`/setup` と `/settings` の「画像・動画の安全設定」でNSFW（性器・女性の胸の露出）とNSFL（グロ・流血）を個別に許可できます。初期値と旧設定は両方拒否です。性的画像の投稿拒否には3分類モデルのNSFWスコアを使用せず、NudeNet 320nで `FEMALE_BREAST_EXPOSED`、`FEMALE_GENITALIA_EXPOSED`、`MALE_GENITALIA_EXPOSED` を信頼度0.5以上で検出した場合に拒否します。腹・肩・下着、覆われた胸・性器、男性の胸、臀部のみでは拒否しません。女性の胸カテゴリは乳首そのものの検出ではないため、希望する基準を完全には保証できません。実写と二次元は同じ基準です。グロは既存3分類モデルのNSFL判定を継続します。一般添付、画像URL、X動画リンクを含め送信直前の現在設定で検査します。非画像・非動画ファイルは従来通りです。
+
+部位検出モデルの手動配置は、[固定リビジョン](https://huggingface.co/deepghs/nudenet_onnx/tree/44956a0587943016350c7815f9e0dec089d45cae) の `320n.onnx` を `models/nudenet/320n.onnx` に置いてください。配置先は `NUDITY_MODEL_DIR` で変更できます。起動時にSHA-256を検証します。ラベルと320×320入力サイズは実ONNX内のメタデータから確認しています。実ファイルの入力名は `images`、出力名は `output0`（バッチ1、22×2100）。RGB・0〜1・CHWで入力し、アスペクト比を保って320以内にbilinear縮小、右・下を黒でパディングします。透過部分は白背景に合成します。YOLOの出力をTypeScriptで解釈し、信頼度0.25未満を除外、IoU 0.45のNMSを適用します。部位の信頼度は互いに排他的な3分類確率ではなく、`classifyImage` の既存APIと別の結果です。出典とモデル内ライセンス表記は [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) を参照してください。
 
 動画は先頭と約5秒ごとのフレームを逐次判定します。最大10分、解析タイムアウト120秒、取得上限32MiBです。`FFMPEG_PATH` / `FFPROBE_PATH` で実行ファイルを指定できます。壊れた画像・動画や判定失敗は拒否します。サンプリング間の短い場面やモデルの誤判定は検出できないことがあります。
 
 メモリ優先でsharpキャッシュ無効、sharp並列数1、CPU推論スレッド1、推論同時数1、CPUメモリアリーナ・メモリパターン無効です。モデルロード時と各推論時にRSS（MiB）・所要時間・ラベルをログに出します。低メモリ環境では `MEDIA_CONCURRENCY=1` も設定してください。
 
 検証は `bun run check` と `bun run test`。実画像4分類の確認は、管理者が用意した成人のみの適法なサンプルを `sfw.jpg`、`nsfw-real.jpg`、`nsfw-anime.png`、`nsfl.jpg` として置き、`SAFETY_FIXTURES_DIR` にディレクトリを指定して `bunx tsx --test tests/safety.test.ts` を実行します。未指定の場合、この4件は明示的にスキップされます。サンプルはGitに追加しないでください。
+
+肌露出の許可確認には `SAFETY_ALLOWED_IMAGE` に画像ファイルのパスを指定し、`bunx tsx --test tests/nudity.test.ts` を実行してください。元画像と投稿時の最適化後画像の両方を検査します。部位検出の実画像確認は `SAFETY_FIXTURES_DIR` 内に `exposed-real.jpg`、`exposed-anime.png`（胸または性器の露出を含む成人サンプル）を配置します。未指定の場合はスキップされます。

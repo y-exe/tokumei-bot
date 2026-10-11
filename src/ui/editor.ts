@@ -67,10 +67,10 @@ export function managementView(id: string, session: EditorSession): ContainerBui
 }
 export function safetyView(id: string, session: EditorSession): ContainerBuilder[] {
   const config = editorConfig(session);
-  const menu = card('画像・動画の安全設定', '未選択は拒否（初期値）。NSFWは性的表現、NSFLはグロ・流血です。実写とイラストは同じカテゴリで判定します。', colors.settings);
+  const menu = card('画像・動画の安全設定', '未選択は拒否（初期値）。NSFWは露出した性器・女性の胸、NSFLはグロ・流血です。腹・肩・下着のみの露出は拒否対象にしません。実写とイラストは同じ基準です。', colors.settings);
   menu.addActionRowComponents(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder()
     .setCustomId(`cfg:${id}:safety`).setPlaceholder('許可するカテゴリ').setMinValues(0).setMaxValues(2)
-    .addOptions({ label: 'NSFW（エロ・性的表現）を許可', value: 'nsfw', default: config.content.allowNsfw ?? false },
+    .addOptions({ label: 'NSFW（性器・女性の胸の露出）を許可', value: 'nsfw', default: config.content.allowNsfw ?? false },
       { label: 'NSFL（グロ・流血）を許可', value: 'nsfl', default: config.content.allowNsfl ?? false })));
   menu.addActionRowComponents(row(button(`cfg:${id}:caption`, '画像の説明文'), button(`cfg:${id}:back`, 'プレビューに戻る')));
   return [menu];
