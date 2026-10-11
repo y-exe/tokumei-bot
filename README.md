@@ -67,6 +67,10 @@ Discordサーバーに匿名投稿機能を追加するBotです。<br>
 © 2026 yexe
 # ローカル画像・動画の安全判定
 
+操作失敗時には `ERR-` から始まるエラーコードを表示します。サーバー管理者は `/error code:エラーコード` でそのサーバーの詳細を非公開で照会できます。詳細はPostgreSQLの `v2_diagnostics` に30日間保存し、原因・スタック・操作名・Discordのコードを記録します。投稿本文・ユーザーID・リクエスト全体は記録せず、秘密環境変数とURLは秘匿します。DB障害時は同じコードで標準エラーログに残します。コマンド追加後は `bun run commands` で登録してください。
+
+Dockerではビルド時にモデルを取得して同梱するため、読み取り専用ルートでも起動できます。動画解析には書き込み可能な `/tmp` が必要です。Kubernetesではディスクの `emptyDir` を `/tmp` にマウントしてください。
+
 `bun install` 後、`ffmpeg` と `ffprobe` をPATHに配置してください（Dockerイメージには同梱）。Bot起動時に一度だけCPU用の `onnxruntime-node` セッションを作ります。Pythonや画像判定の外部APIは使用しません。モデルがない初回起動ではHugging Faceから自動取得するため通信が必要です。以後の推論はローカルです。
 
 手動配置する場合は、[モデルの固定リビジョン](https://huggingface.co/OwenElliott/image-safety-classifier-xs/tree/54f4560bd9c5ee92d45dc30418a8f8680e80de6d) の `config.json` と `onnx/image-safety-classifier-xs.onnx` をそれぞれ `models/image-safety-xs/config.json` と `models/image-safety-xs/model.onnx` に置いてください。`SAFETY_MODEL_DIR` で配置先を変更できます。コンテナではこのディレクトリを永続化すると再起動時の再取得を避けられます。

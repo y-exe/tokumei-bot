@@ -16,6 +16,16 @@ before(async () => {
 });
 after(async () => { if (store) await store.close(); if (server) await server.stop(); if (db) await db.close(); });
 
+test('エラー詳細は再読み込みでき別サーバーには開示せず30日で削除する', async () => {
+  await store.saveDiagnostic('ERR-0123456789ABCDEF', guild, channel, 'interaction', 'setup', '原因の詳細');
+  assert.equal((await store.diagnostic('ERR-0123456789ABCDEF', guild))?.details, '原因の詳細');
+  assert.equal(await store.diagnostic('ERR-0123456789ABCDEF', 'other'), null);
+  await store.pool.query("UPDATE v2_diagnostics SET created_at=now()-interval '31 days' WHERE code=$1", ['ERR-0123456789ABCDEF']);
+  assert.equal(await store.diagnostic('ERR-0123456789ABCDEF', guild), null);
+  await store.cleanup();
+  assert.equal((await store.pool.query('SELECT count(*)::int AS count FROM v2_diagnostics')).rows[0].count, 0);
+});
+
 test('処罰中の追加通報と二重実行を拒否し、要望の永久停止は通常投稿へ影響しない',async()=>{
   const g='moderation-g',c='moderation-c',m='moderation-m';
   await store.settings(g,c,true);const config=structuredClone(defaults);config.policy.cooldown=0;

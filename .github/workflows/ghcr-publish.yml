@@ -47,6 +47,21 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Build runtime test image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: tokumei-runtime-test:local
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify read-only offline startup
+        run: >-
+          docker run --rm --read-only --network none --memory 512m --cpus 1
+          --tmpfs /tmp:rw,size=128m --user 1000:1000 tokumei-runtime-test:local
+          bun -e "import { initializeSafety, classifyImage } from './src/media/safety.ts'; import sharp from 'sharp'; await initializeSafety(); const image = await sharp({create:{width:64,height:64,channels:3,background:'white'}}).png().toBuffer(); const result = await classifyImage(image); if(result.label !== 'SFW') throw new Error('安全画像の判定失敗');"
+
       - name: Log in to the Container registry
         uses: docker/login-action@v3
         with:

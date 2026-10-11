@@ -19,6 +19,7 @@ import { previewView, type PreviewSession } from './ui/post.js';
 import { Sessions } from './ui/sessions.js';
 import {reportView} from './ui/report.js';
 import {Moderation,punishmentLabels,type Punishment} from './services/moderation.js';
+import { diagnosticCode, diagnosticDetails } from './infra/diagnostics.js';
 
 const emptyMentions = { parse: [] as ('users' | 'roles' | 'everyone')[] };
 type UIInteraction = RepliableInteraction;
@@ -61,11 +62,15 @@ export class App {
       else if (interaction.isModalSubmit()) await this.modal(interaction);
       else if (interaction.isButton() || interaction.isAnySelectMenu()) await this.component(interaction);
     } catch (error) {
+      const code = diagnosticCode();
+      const details = diagnosticDetails(error);
+      const action = interaction.isCommand() ? interaction.commandName : 'customId' in interaction ? interaction.customId.split(':').filter((_, index) => index !== 1).join(':').slice(0, 100) : '不明';
+      console.error('操作を処理できませんでした', { code, action, interactionId: interaction.id, details });
+      try { await this.store.saveDiagnostic(code, interaction.guildId, interaction.channelId, interaction.id, action, details); }
+      catch { console.error('エラー詳細のDB保存に失敗しました', { code }); }
       let message = errorMessage(error);
       if (error instanceof ZodError) message = error.issues.map(issue => issue.message).slice(0, 3).join('\n');
-      if (!(error instanceof UserError) && !(error instanceof ZodError)) {
-        console.error('操作を処理できませんでした', { kind: error instanceof Error ? error.name : 'unknown', interactionId: interaction.id });
-      }
+      message += `\n\nエラーコード: ${code}\n管理者は /error で詳細を確認できます。`;
       if (interaction.replied && !interaction.deferred) await interaction.followUp(payload([card('操作を確認してください', message, colors.danger)])).catch(() => undefined);
       else await this.respond(interaction, [card('操作を確認してください', message, colors.danger)]).catch(() => undefined);
     }
@@ -73,6 +78,15 @@ export class App {
   async command(interaction: import('discord.js').ChatInputCommandInteraction): Promise<void> {
     const settings = await this.store.settings(interaction.guildId!, interaction.channelId!);
     switch (interaction.commandName) {
+      case 'error': {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) throw new UserError('エラー詳細の確認にはサーバー管理権限が必要です。');
+        const code = interaction.options.getString('code', true).trim().toUpperCase();
+        if (!/^ERR-[A-F0-9]{16}$/.test(code)) throw new UserError('表示されたエラーコードを指定してください。');
+        const record = await this.store.diagnostic(code, interaction.guildId!);
+        if (!record) throw new UserError('このサーバーの30日以内のエラーが見つかりません。');
+        await this.respond(interaction, [card(`エラー詳細: ${code}`, `操作: ${record.action}\n発生時刻: ${record.created_at.toISOString()}\n\n${record.details.slice(0, 3000).replaceAll('`', 'ˋ')}`, colors.warning)]); return;
+      }
       case 'setup':
       case 'settings': {
         await this.requireManager(interaction);

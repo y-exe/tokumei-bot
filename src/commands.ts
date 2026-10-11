@@ -2,6 +2,8 @@ import { ApplicationCommandType, ContextMenuCommandBuilder, PermissionFlagsBits,
 
 const guildCommand = (name: string, description: string) => new SlashCommandBuilder().setName(name).setDescription(description).setDMPermission(false);
 export const commands = [
+  guildCommand('error', 'エラーコードから保存された詳細を確認する').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .addStringOption(option => option.setName('code').setDescription('ERR-から始まるエラーコード').setRequired(true).setMaxLength(20)),
   guildCommand('setup', 'このチャンネルに匿名投稿を設置する').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .addStringOption(option => option.setName('mode').setDescription('投稿モード').setRequired(true).addChoices(
       { name: '匿名チャット', value: 'chat' }, { name: '匿名画像', value: 'image' }, { name: '画像アップロード専用', value: 'upload' }, { name: '匿名要望', value: 'request' })),

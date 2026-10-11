@@ -31,7 +31,7 @@ export function editorView(id: string, session: EditorSession): ContainerBuilder
     ].map(option => ({ ...option, default: config.content[option.value as 'text' | 'images' | 'urls' | 'caption'] }));
   menu.addTextDisplayComponents(text('**投稿できる内容** · 選択した項目を有効にします'));
   menu.addActionRowComponents(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder()
-    .setCustomId(`cfg:${id}:content`).setPlaceholder('投稿形式を選ぶ').setMinValues(1).setMaxValues(5).addOptions(options)));
+    .setCustomId(`cfg:${id}:content`).setPlaceholder('投稿形式を選ぶ').setMinValues(1).setMaxValues(options.length).addOptions(options)));
   menu.addActionRowComponents(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder()
     .setCustomId(`cfg:${id}:providers`).setPlaceholder('URL変換するサイト').setMinValues(0).setMaxValues(9)
     .addOptions([{ label: 'X / Twitter', value: 'x' }, { label: 'Pixiv', value: 'pixiv' }, { label: '画像への直接URL', value: 'direct' },

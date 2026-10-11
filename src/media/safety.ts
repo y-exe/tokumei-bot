@@ -24,9 +24,7 @@ async function download(name: string, remote: string): Promise<void> {
 
 export function initializeSafety(): Promise<{ session: ort.InferenceSession; labels: SafetyLabel[] }> {
   return singleton ??= (async () => {
-    await mkdir(directory, { recursive: true });
-    await download('config.json', 'config.json');
-    await download('model.onnx', 'onnx/image-safety-classifier-xs.onnx');
+    await prepareSafetyModels();
     const config = JSON.parse(await readFile(resolve(directory, 'config.json'), 'utf8'));
     const labels: SafetyLabel[] = config.pretrained_cfg?.label_names;
     if (!Array.isArray(labels) || labels.length !== 3 || new Set(labels).size !== 3 || !labels.every(label => ['SFW', 'NSFW', 'NSFL'].includes(label))) throw new Error('モデルラベルが不正です');
@@ -38,6 +36,12 @@ export function initializeSafety(): Promise<{ session: ort.InferenceSession; lab
     console.info(`[safety] loaded rssMB=${(process.memoryUsage().rss / 1048576).toFixed(1)}`);
     return { session, labels };
   })();
+}
+export async function prepareSafetyModels(): Promise<void> {
+  try { await access(resolve(directory, 'config.json')); await access(resolve(directory, 'model.onnx')); return; } catch {}
+  await mkdir(directory, { recursive: true });
+  await download('config.json', 'config.json');
+  await download('model.onnx', 'onnx/image-safety-classifier-xs.onnx');
 }
 
 export async function classifyImage(input: Buffer | string): Promise<SafetyResult> {

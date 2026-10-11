@@ -25,6 +25,10 @@ export interface ReportNotice {
 export interface ReportDetail extends ReportNotice {reporters:string[];userId:string;anonymousId:number;notificationId:string|null;}
 
 const schema = `
+CREATE TABLE IF NOT EXISTS v2_diagnostics (
+  code text PRIMARY KEY, guild_id text, channel_id text, interaction_id text NOT NULL,
+  action text NOT NULL, details text NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS v2_guilds (
   guild_id text PRIMARY KEY, config jsonb NOT NULL, version integer NOT NULL DEFAULT 0
 );
@@ -95,6 +99,12 @@ export class Store {
   constructor(databaseUrl?: string) { this.pool = new Pool({ connectionString: databaseUrl, max: 5, connectionTimeoutMillis: 5000 }); }
   async initialize(): Promise<void> { await this.pool.query(schema); await this.pool.query(reportRetrySchema); }
   async close(): Promise<void> { await this.pool.end(); }
+  async saveDiagnostic(code: string, guildId: string | null, channelId: string | null, interactionId: string, action: string, details: string): Promise<void> {
+    await this.pool.query('INSERT INTO v2_diagnostics(code,guild_id,channel_id,interaction_id,action,details) VALUES($1,$2,$3,$4,$5,$6)', [code, guildId, channelId, interactionId, action, details]);
+  }
+  async diagnostic(code: string, guildId: string): Promise<{code: string; action: string; details: string; created_at: Date} | null> {
+    return (await this.pool.query("SELECT code,action,details,created_at FROM v2_diagnostics WHERE code=$1 AND guild_id=$2 AND created_at>now()-interval '30 days'", [code, guildId])).rows[0] ?? null;
+  }
   async transaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
     try { await client.query('BEGIN'); const value = await fn(client); await client.query('COMMIT'); return value; }
@@ -369,6 +379,7 @@ export class Store {
   async cleanup(): Promise<void> {
     await this.transaction(async client => {
       await client.query('DELETE FROM v2_reports WHERE expires_at<=now()');
+      await client.query("DELETE FROM v2_diagnostics WHERE created_at<now()-interval '30 days'");
       await client.query('DELETE FROM v2_posts WHERE expires_at<=now()');
       await client.query("DELETE FROM v2_sessions WHERE last_post<now()-interval '1 day'");
       await client.query('DELETE FROM v2_restrictions WHERE expires_at<=now()');

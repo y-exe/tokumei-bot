@@ -17,6 +17,38 @@ function app() {
 function interaction(overrides: Record<string, unknown> = {}) {
   return { guildId: 'g', channelId: 'c', user: { id: 'alice' }, member: { roles: [] }, memberPermissions: new PermissionsBitField(0n), ...overrides } as unknown as RepliableInteraction;
 }
+
+test('/setupと案内の埋め込み編集は選択数上限が選択肢数以内の画面を返す', async () => {
+  const bot = app(); const views: unknown[] = [];
+  bot.respond = async (_interaction, components) => { views.push(components.map(component => component.toJSON())); };
+  const manager = { memberPermissions: new PermissionsBitField(PermissionFlagsBits.ManageGuild) };
+  await bot.command(interaction({ ...manager, commandName: 'setup', options: { getString: () => 'image' } }) as never);
+  bot.store.settings = async () => ({ ...structuredClone(snapshot), panelId: 'panel' });
+  await bot.context(interaction({ ...manager, commandName: '埋め込みを編集（Admin）', targetId: 'panel' }) as never);
+  const inspect = (value: unknown): void => {
+    if (Array.isArray(value)) { value.forEach(inspect); return; }
+    if (!value || typeof value !== 'object') return;
+    const item = value as Record<string, unknown>;
+    if (item.type === ComponentType.StringSelect) assert.ok(Number(item.max_values ?? 1) <= (item.options as unknown[]).length);
+    Object.values(item).forEach(inspect);
+  };
+  assert.equal(views.length, 2); views.forEach(inspect);
+});
+
+test('処理失敗時は画面と保存詳細に同じエラーコードを付ける', async () => {
+  const bot = app(); let savedCode = ''; let shown = '';
+  bot.command = async () => { throw new Error('設定画面の検証に失敗'); };
+  bot.store.saveDiagnostic = async (code, _guild, _channel, _interaction, action, details) => {
+    savedCode = code; assert.equal(action, 'setup'); assert.ok(details.includes('設定画面の検証に失敗'));
+  };
+  bot.respond = async (_interaction, components) => { shown = JSON.stringify(components.map(component => component.toJSON())); };
+  const command = interaction({ id: 'interaction', commandName: 'setup', isRepliable: () => true, isChatInputCommand: () => true, isCommand: () => true });
+  await bot.handle(command as never);
+  assert.match(savedCode, /^ERR-[A-F0-9]{16}$/); assert.ok(shown.includes(savedCode));
+  bot.store.saveDiagnostic = async () => { throw new Error('DB停止'); };
+  await bot.handle(command as never);
+  assert.ok(shown.includes('エラーコード'));
+});
 test('管理操作は実行時に権限を確認し、サーバー管理権限だけを無条件で許可する', async () => {
   const bot = app();
   await assert.rejects(bot.requireManager(interaction()), /管理権限/);

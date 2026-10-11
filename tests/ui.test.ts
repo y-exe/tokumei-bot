@@ -94,6 +94,11 @@ test('画像とサムネイルを設定した編集画面も40コンポーネン
   assert.ok(flatten(view).filter(item => typeof item.type === 'number').length <= 40);
   assert.ok(customIds(view).every(id => id.length <= 100));
   assert.ok(flatten(view).filter(item => String(item.custom_id ?? '').startsWith('post:')).every(item => item.disabled));
+  for (const select of flatten(view).filter(item => item.type === ComponentType.StringSelect)) {
+    const options = select.options as unknown[];
+    assert.ok(Number(select.max_values ?? 1) <= options.length);
+    assert.ok(Number(select.min_values ?? 1) <= Number(select.max_values ?? 1));
+  }
   assert.ok(flatten(managementView('session', session).map(item => item.toJSON())).length <= 40);
 });
 test('匿名投稿とプレビューは添付をMediaGalleryで明示し、ファイル選択とキャンセルを持つ', () => {

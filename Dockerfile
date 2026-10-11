@@ -5,6 +5,7 @@ WORKDIR /app
 COPY --chown=bun:bun package.json bun.lock ./
 RUN bun install --frozen-lockfile --production
 COPY --chown=bun:bun src ./src
+RUN bun -e "import { prepareSafetyModels } from './src/media/safety.ts'; await prepareSafetyModels();"
 USER bun
 EXPOSE 3000
 CMD ["bun", "--smol", "src/index.ts"]
