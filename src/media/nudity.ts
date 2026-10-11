@@ -41,11 +41,14 @@ function fields(buffer: Buffer): { id: number; value: Buffer }[] {
   return result;
 }
 
-export function modelLabels(buffer: Buffer): string[] {
-  const metadata = Object.fromEntries(fields(buffer).filter(field => field.id === 14).map(field => {
+export function onnxMetadata(buffer: Buffer): Record<string, string> {
+  return Object.fromEntries(fields(buffer).filter(field => field.id === 14).map(field => {
     const entry = fields(field.value);
     return [entry.find(item => item.id === 1)?.value.toString(), entry.find(item => item.id === 2)?.value.toString()];
   }));
+}
+export function modelLabels(buffer: Buffer): string[] {
+  const metadata = onnxMetadata(buffer);
   if (metadata.imgsz !== '[320, 320]' || metadata.task !== 'detect') throw new Error('未対応の部位検出モデルです');
   const labels: string[] = [];
   for (const match of (metadata.names ?? '').matchAll(/(\d+):\s*'([A-Z_]+)'/g)) {
@@ -80,7 +83,7 @@ export function initializeNudity(): Promise<{ session: ort.InferenceSession; lab
   })();
 }
 
-export function parseDetections(values: Float32Array, count: number, labels: string[]): BodyDetection[] {
+export function parseDetections(values: Float32Array, count: number, labels: string[], minimumScore = 0.25, iouThreshold = 0.45): BodyDetection[] {
   if (values.length !== (labels.length + 4) * count || count <= 0) throw new Error('部位検出の出力形状が不正です');
   const candidates: BodyDetection[] = [];
   for (let i = 0; i < count; i++) {
@@ -90,7 +93,7 @@ export function parseDetections(values: Float32Array, count: number, labels: str
       if (!Number.isFinite(value) || value < 0 || value > 1) throw new Error('部位検出の確率が不正です');
       if (value > score) { score = value; classId = c; }
     }
-    if (score < 0.25) continue;
+    if (score < minimumScore) continue;
     const x = values[i]!; const y = values[count + i]!; const w = values[count * 2 + i]!; const h = values[count * 3 + i]!;
     if (![x, y, w, h].every(Number.isFinite) || w <= 0 || h <= 0) throw new Error('部位検出の座標が不正です');
     candidates.push({ label: labels[classId]!, score, box: [x - w / 2, y - h / 2, w, h] });
@@ -100,7 +103,7 @@ export function parseDetections(values: Float32Array, count: number, labels: str
     if (kept.some(other => {
       const [x, y, w, h] = candidate.box; const [ox, oy, ow, oh] = other.box;
       const intersection = Math.max(0, Math.min(x + w, ox + ow) - Math.max(x, ox)) * Math.max(0, Math.min(y + h, oy + oh) - Math.max(y, oy));
-      return intersection / (w * h + ow * oh - intersection) > 0.45;
+      return intersection / (w * h + ow * oh - intersection) > iouThreshold;
     })) continue;
     kept.push(candidate);
   }

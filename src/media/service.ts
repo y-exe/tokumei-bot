@@ -2,7 +2,8 @@ import sharp from 'sharp';
 import { z } from 'zod';
 import type { Config, Provider } from '../domain/config.js';
 import { providerNames } from '../domain/config.js';
-import { UserError } from '../domain/errors.js';
+import { UserError, MediaSafetyError } from '../domain/errors.js';
+import { analyzeImageSafety, certifyImage, enforceImageSafety } from './safety-policy.js';
 import type { MediaFile } from '../domain/validation.js';
 import { SafeHttp, WorkQueue, MAX_DOWNLOAD_BYTES } from './http.js';
 
@@ -55,6 +56,8 @@ export class MediaService {
       const animated = (metadata.pages ?? 1) > 1;
       if (animated) return { data, name: `image_${index + 1}.${metadata.format}`, kind: 'animation' };
       if ((metadata.width ?? 0) * (metadata.height ?? 0) > 40_000_000) return passthrough();
+      const safety = await analyzeImageSafety(data);
+      enforceImageSafety(safety, config);
       const pipeline = image.rotate().resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true });
       const transparent = metadata.hasAlpha;
       let output = animated ? await pipeline.webp({ quality: 85, effort: 3 }).toBuffer() :
@@ -64,7 +67,7 @@ export class MediaService {
         const png = await pipeline.png({ compressionLevel: 6 }).toBuffer();
         if (png.length < output.length) { output = png; extension = 'png'; }
       }
-      return { data: output, name: `image_${index + 1}.${extension}`, kind: animated ? 'animation' : 'image' };
+      return { data: output, name: `image_${index + 1}.${extension}`, kind: animated ? 'animation' : 'image', safety: certifyImage(output, safety) };
     } catch (error) {
       if (error instanceof UserError) throw error;
       return passthrough();
@@ -182,6 +185,7 @@ export class MediaService {
           const name = original && original !== 'proxy' ? original : undefined;
           files.push(await this.optimize(response.data, config, files.length, name, response.contentType));
         } catch (error) {
+          if (error instanceof MediaSafetyError) throw error;
           if (error instanceof UserError && error.message.includes('大きすぎ')) warnings.push(`元のファイル${sourceIndex + 1}は大きすぎて添付できませんでした。`);
           else warnings.push(`元のファイル${sourceIndex + 1}を取得できませんでした。取得できたファイルだけを表示しています。`);
         }

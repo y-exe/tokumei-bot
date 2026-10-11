@@ -32,7 +32,7 @@ export class Posting {
     const settings = await this.store.settings(input.guildId, input.channelId, true);
     if (!settings.enabled || !settings.webhook) throw new UserError('このチャンネルには匿名投稿が設置されていません。');
     validatePost(input, settings.config);
-    for (const file of input.media) await checkMediaSafety(file.data, settings.config, file.name);
+    for (const file of input.media) await checkMediaSafety(file.data, settings.config, file.name, '', file.safety);
     for (const url of input.videoLinks ?? []) {
       const response = await new SafeHttp().get(url, MAX_DOWNLOAD_BYTES);
       await checkMediaSafety(response.data, settings.config, 'video.mp4', 'video/mp4');

@@ -67,7 +67,7 @@ export function managementView(id: string, session: EditorSession): ContainerBui
 }
 export function safetyView(id: string, session: EditorSession): ContainerBuilder[] {
   const config = editorConfig(session);
-  const menu = card('画像・動画の安全設定', '未選択は拒否（初期値）。NSFWは露出した性器・女性の胸、NSFLはグロ・流血です。腹・肩・下着のみの露出は拒否対象にしません。実写とイラストは同じ基準です。', colors.settings);
+  const menu = card('画像・動画の安全設定', '未選択は拒否（初期値）。NSFWは性器・女性の胸や乳首の露出、NSFLはグロ・流血です。腹・肩・下着のみの露出は拒否対象にしません。', colors.settings);
   menu.addActionRowComponents(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder()
     .setCustomId(`cfg:${id}:safety`).setPlaceholder('許可するカテゴリ').setMinValues(0).setMaxValues(2)
     .addOptions({ label: 'NSFW（性器・女性の胸の露出）を許可', value: 'nsfw', default: config.content.allowNsfw ?? false },

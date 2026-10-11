@@ -1,7 +1,7 @@
 import type { Config } from './config.js';
 import { UserError } from './errors.js';
 
-export interface MediaFile { data: Buffer; name: string; kind: 'image' | 'animation' | 'video' | 'file'; }
+export interface MediaFile { data: Buffer; name: string; kind: 'image' | 'animation' | 'video' | 'file'; safety?: { nsfw: boolean; nsfl: boolean; sha256: string; version: string }; }
 export interface PostInput {
   guildId: string; channelId: string; userId: string; roles: string[]; operationId: string;
   text: string; media: MediaFile[]; source?: string; replyTo?: string; videoLinks?: string[];

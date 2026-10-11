@@ -1,5 +1,14 @@
 # モデルの出典
 
+## Anime Censor Detection v1.0 s
+
+- 出典: https://huggingface.co/deepghs/anime_censor_detection/tree/0cf62fd6b28213b40ae0c0055f92e7ae6a96bdc2/censor_detect_v1.0_s
+- 作者: DeepGHS
+- モデルカードのライセンス: MIT
+- 参照実装: https://github.com/deepghs/imgutils/blob/main/imgutils/generic/yolo.py
+
+モデルは改変せず取得しています。ラベルと推奨閾値は配布JSONから読み込み、ラベルはONNXメタデータとも照合します。
+
 ## NudeNet 320n
 
 - 元プロジェクト: https://github.com/notAI-tech/NudeNet
