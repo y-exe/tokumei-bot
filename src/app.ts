@@ -62,15 +62,17 @@ export class App {
       else if (interaction.isModalSubmit()) await this.modal(interaction);
       else if (interaction.isButton() || interaction.isAnySelectMenu()) await this.component(interaction);
     } catch (error) {
-      const code = diagnosticCode();
-      const details = diagnosticDetails(error);
-      const action = interaction.isCommand() ? interaction.commandName : 'customId' in interaction ? interaction.customId.split(':').filter((_, index) => index !== 1).join(':').slice(0, 100) : '不明';
-      console.error('操作を処理できませんでした', { code, action, interactionId: interaction.id, details });
-      try { await this.store.saveDiagnostic(code, interaction.guildId, interaction.channelId, interaction.id, action, details); }
-      catch { console.error('エラー詳細のDB保存に失敗しました', { code }); }
       let message = errorMessage(error);
       if (error instanceof ZodError) message = error.issues.map(issue => issue.message).slice(0, 3).join('\n');
-      message += `\n\nエラーコード: ${code}\n管理者は /error で詳細を確認できます。`;
+      if (!(error instanceof UserError) && !(error instanceof ZodError)) {
+        const code = diagnosticCode();
+        const details = diagnosticDetails(error);
+        const action = interaction.isCommand() ? interaction.commandName : 'customId' in interaction ? interaction.customId.split(':').filter((_, index) => index !== 1).join(':').slice(0, 100) : '不明';
+        console.error('操作を処理できませんでした', { code, action, interactionId: interaction.id, details });
+        try { await this.store.saveDiagnostic(code, interaction.guildId, interaction.channelId, interaction.id, action, details); }
+        catch { console.error('エラー詳細のDB保存に失敗しました', { code }); }
+        message += `\n\nエラーコード: \`${code}\``;
+      }
       if (interaction.replied && !interaction.deferred) await interaction.followUp(payload([card('操作を確認してください', message, colors.danger)])).catch(() => undefined);
       else await this.respond(interaction, [card('操作を確認してください', message, colors.danger)]).catch(() => undefined);
     }

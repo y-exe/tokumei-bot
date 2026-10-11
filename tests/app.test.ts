@@ -6,6 +6,8 @@ import { App } from '../src/app.js';
 import { defaults } from '../src/domain/config.js';
 import { SecretBox } from '../src/infra/secrets.js';
 import { MediaService } from '../src/media/service.js';
+import { UserError } from '../src/domain/errors.js';
+import { z } from 'zod';
 import type { Store } from '../src/infra/store.js';
 import type { Client, RepliableInteraction, ButtonInteraction, ModalSubmitInteraction } from 'discord.js';
 
@@ -44,10 +46,22 @@ test('処理失敗時は画面と保存詳細に同じエラーコードを付�
   bot.respond = async (_interaction, components) => { shown = JSON.stringify(components.map(component => component.toJSON())); };
   const command = interaction({ id: 'interaction', commandName: 'setup', isRepliable: () => true, isChatInputCommand: () => true, isCommand: () => true });
   await bot.handle(command as never);
-  assert.match(savedCode, /^ERR-[A-F0-9]{16}$/); assert.ok(shown.includes(savedCode));
+  assert.match(savedCode, /^ERR-[A-F0-9]{16}$/); assert.ok(shown.includes('`' + savedCode + '`'));
+  assert.ok(!shown.includes('/error'));
   bot.store.saveDiagnostic = async () => { throw new Error('DB停止'); };
   await bot.handle(command as never);
   assert.ok(shown.includes('エラーコード'));
+});
+
+test('想定内の拒否と入力エラーにはエラーコードや照会案内を表示・保存しない', async () => {
+  const bot = app(); let shown = ''; let saved = false;
+  bot.store.saveDiagnostic = async () => { saved = true; };
+  bot.respond = async (_interaction, components) => { shown = JSON.stringify(components.map(component => component.toJSON())); };
+  for (const error of [new UserError('性的な画像でない場合は管理者にお問い合わせください'), z.string().safeParse(123).error!]) {
+    bot.command = async () => { throw error; };
+    await bot.handle(interaction({ id: 'i', commandName: 'setup', isRepliable: () => true, isChatInputCommand: () => true }) as never);
+    assert.ok(!shown.includes('エラーコード')); assert.ok(!shown.includes('/error')); assert.equal(saved, false);
+  }
 });
 test('管理操作は実行時に権限を確認し、サーバー管理権限だけを無条件で許可する', async () => {
   const bot = app();

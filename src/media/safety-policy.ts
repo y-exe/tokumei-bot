@@ -12,7 +12,7 @@ import { WorkQueue } from './http.js';
 const queue = new WorkQueue(1, 10);
 export function enforceSafety(result: SafetyResult, config: Config): void {
   if ((result.label === 'NSFW' && !config.content.allowNsfw) || (result.label === 'NSFL' && !config.content.allowNsfl))
-    throw new UserError(`このチャンネルでは${result.label === 'NSFW' ? '性的な画像・動画（NSFW）' : 'グロ・流血画像・動画（NSFL）'}を投稿できません。`);
+    throw new UserError(`このチャンネルでは${result.label === 'NSFW' ? '性的な画像・動画（NSFW）' : 'グロ・流血画像・動画（NSFL）'}を投稿できません。\n\n${result.label === 'NSFW' ? '性的な画像でない場合は管理者にお問い合わせください\nNSFW検知モデルの改善等致します' : 'グロ・流血画像でない場合は管理者にお問い合わせください\nNSFL検知モデルの改善等致します'}`);
 }
 
 export async function checkMediaSafety(data: Buffer, config: Config, name = '', contentType = ''): Promise<void> {

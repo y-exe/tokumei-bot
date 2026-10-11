@@ -14,6 +14,7 @@ test('安全設定は既存設定でも拒否が初期値でカテゴリごと�
   const nsfw = { sfw: 0, nsfw: 1, nsfl: 0, label: 'NSFW' as const };
   const nsfl = { sfw: 0, nsfw: 0, nsfl: 1, label: 'NSFL' as const };
   assert.throws(() => enforceSafety(nsfw, defaults), /NSFW/);
+  assert.throws(() => enforceSafety(nsfw, defaults), /性的な画像でない場合は管理者にお問い合わせください\nNSFW検知モデルの改善等致します/);
   assert.throws(() => enforceSafety(nsfl, defaults), /NSFL/);
   const config = resolveConfig(defaults, { content: { allowNsfw: true } });
   enforceSafety(nsfw, config);
