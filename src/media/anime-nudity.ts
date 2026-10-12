@@ -32,6 +32,8 @@ export async function prepareAnimeNudityModel(): Promise<void> {
 
 export function initializeAnimeNudity(): Promise<{ session: ort.InferenceSession; labels: string[]; threshold: number }> {
   return singleton ??= (async () => {
+    const threads = Number(process.env.ANIME_INFERENCE_THREADS ?? '1');
+    if (threads !== 1 && threads !== 2) throw new Error('ANIME_INFERENCE_THREADSは1または2を指定してください');
     await prepareAnimeNudityModel();
     const data = await readFile(resolve(directory, modelFile));
     if (createHash('sha256').update(data).digest('hex') !== checksum) throw new Error('二次元モデルのチェックサム不一致');
@@ -41,9 +43,9 @@ export function initializeAnimeNudity(): Promise<{ session: ort.InferenceSession
     if (!Array.isArray(labels) || labels.length !== 3 || modelNames.length !== labels.length || !labels.every((label, index) => modelNames[index]?.[1] === String(index) && modelNames[index]?.[2] === label && ['nipple_f', 'penis', 'pussy'].includes(label)) || new Set(labels).size !== 3 || metadata.stride !== '32') throw new Error('二次元モデルのラベル・メタデータが不正です');
     const threshold: number = JSON.parse(await readFile(resolve(directory, 'threshold-s.json'), 'utf8')).threshold;
     if (threshold !== 0.238) throw new Error('二次元モデルの判定閾値が不正です');
-    const session = await ort.InferenceSession.create(resolve(directory, modelFile), { executionProviders: ['cpu'], intraOpNumThreads: 1, interOpNumThreads: 1, executionMode: 'sequential', enableCpuMemArena: false, enableMemPattern: false });
+    const session = await ort.InferenceSession.create(resolve(directory, modelFile), { executionProviders: ['cpu'], intraOpNumThreads: threads, interOpNumThreads: 1, executionMode: 'sequential', enableCpuMemArena: false, enableMemPattern: false });
     if (session.inputNames.join() !== 'images' || session.outputNames.join() !== 'output0') throw new Error('二次元モデルの入出力が不正です');
-    console.info(`[anime-nudity] loaded rssMB=${(process.memoryUsage().rss / 1048576).toFixed(1)}`);
+    console.info(`[anime-nudity] 読み込み完了 スレッド数=${threads} rssMB=${(process.memoryUsage().rss / 1048576).toFixed(1)}`);
     return { session, labels, threshold };
   })();
 }
