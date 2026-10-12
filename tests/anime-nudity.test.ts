@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import sharp from 'sharp';
-import { detectAnimeExposure, initializeAnimeNudity } from '../src/media/anime-nudity.js';
+import { confirmAnimeExposure, detectAnimeExposure, hasAnimeExposure, initializeAnimeNudity } from '../src/media/anime-nudity.js';
 import { parseDetections } from '../src/media/nudity.js';
+import type { BodyDetection } from '../src/media/nudity.js';
 import { checkMediaSafety, certifyImage } from '../src/media/safety-policy.js';
 import { MediaService } from '../src/media/service.js';
 import { defaults } from '../src/domain/config.js';
@@ -24,6 +25,50 @@ test('二次元モデルの推奨閾値が0.25未満でも正しく適用する'
   assert.equal(parseDetections(values, 1, ['nipple_f', 'penis', 'pussy'], 0.238, 0.7).length, 1);
   values[4] = 0.23;
   assert.equal(parseDetections(values, 1, ['nipple_f', 'penis', 'pussy'], 0.238, 0.7).length, 0);
+});
+
+test('高信頼の検出と検出なしでは切り出し推論を行わない', async () => {
+  const detect = async () => { throw new Error('不要な再推論'); };
+  assert.equal(await confirmAnimeExposure(Buffer.alloc(0), [], detect), false);
+  assert.equal(await confirmAnimeExposure(Buffer.alloc(0), [{ label: 'penis', score: 0.6, box: [0, 0, 10, 10] }], detect), true);
+});
+
+test('低信頼の検出は周辺を含む領域で同じ部位を再確認する', async () => {
+  const image = await sharp({ create: { width: 300, height: 500, channels: 3, background: 'white' } }).png().toBuffer();
+  const detections: BodyDetection[] = [{ label: 'nipple_f', score: 0.3677, box: [1200, -10, 27, 30] }];
+  const detect = async (crop: Buffer): Promise<BodyDetection[]> => {
+    const metadata = await sharp(crop).metadata();
+    assert.equal(metadata.width, 240);
+    assert.equal(metadata.height, 240);
+    return [{ label: 'nipple_f', score: 0.3, box: [10, 10, 30, 30] }];
+  };
+  assert.equal(await confirmAnimeExposure(image, detections, detect), true);
+  assert.equal(await confirmAnimeExposure(image, detections, async () => []), false);
+  assert.equal(await confirmAnimeExposure(image, detections, async () => [{ label: 'penis', score: 0.8, box: [0, 0, 10, 10] }]), false);
+});
+
+test('複数の低信頼候補は逐次確認し、再検出された場合に拒否する', async () => {
+  const image = await sharp({ create: { width: 64, height: 64, channels: 3, background: 'white' } }).png().toBuffer();
+  const detections: BodyDetection[] = [
+    { label: 'nipple_f', score: 0.5, box: [0, 0, 25, 25] },
+    { label: 'pussy', score: 0.3, box: [600, 600, 250, 200] },
+  ];
+  let calls = 0;
+  assert.equal(await confirmAnimeExposure(image, detections, async crop => {
+    calls++;
+    const metadata = await sharp(crop).metadata();
+    assert.equal(metadata.width, calls === 1 ? 200 : 1216);
+    return calls === 1 ? [] : [detections[1]!];
+  }), true);
+  assert.equal(calls, 2);
+  await assert.rejects(confirmAnimeExposure(image, detections, async () => { throw new Error('推論失敗'); }), /推論失敗/);
+});
+
+test('報告された水着画像は切り出し再確認で許可する', async t => {
+  if (!process.env.SAFETY_SWIMSUIT_IMAGE) { t.skip('SAFETY_SWIMSUIT_IMAGE未設定'); return; }
+  const data = await readFile(process.env.SAFETY_SWIMSUIT_IMAGE);
+  assert.equal(await hasAnimeExposure(data), false);
+  await new MediaService().optimize(data, defaults);
 });
 
 test('元画像の判定は現在の設定で再評価し、内容・バージョンが違うキャッシュは使わない', async () => {

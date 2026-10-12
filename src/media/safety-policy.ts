@@ -10,11 +10,11 @@ import { createHash } from 'node:crypto';
 import { classifyImage, type SafetyResult } from './safety.js';
 import { WorkQueue } from './http.js';
 import { detectBodyParts, exposesRestrictedParts } from './nudity.js';
-import { detectAnimeExposure, ANIME_INPUT_SIZE } from './anime-nudity.js';
+import { hasAnimeExposure, ANIME_INPUT_SIZE } from './anime-nudity.js';
 
 const queue = new WorkQueue(1, 10);
 const frameQueue = new WorkQueue(1, 10);
-const detectorVersion = 'nudenet320-anime-s1216-0.238-v1';
+const detectorVersion = 'nudenet320-anime-s1216-crop8-0.6-v2';
 export type ImageSafetyFacts = { nsfw: boolean; nsfl: boolean };
 export type ImageSafetyCertificate = ImageSafetyFacts & { sha256: string; version: string };
 export function certifyImage(data: Buffer, facts: ImageSafetyFacts): ImageSafetyCertificate {
@@ -32,7 +32,7 @@ export function enforceSafety(result: SafetyResult, config: Config): void {
 export async function analyzeImageSafety(data: Buffer): Promise<ImageSafetyFacts> {
   return frameQueue.run(async () => {
     const result = await classifyImage(data);
-    const nsfw = exposesRestrictedParts(await detectBodyParts(data)) || (await detectAnimeExposure(data)).length > 0;
+    const nsfw = exposesRestrictedParts(await detectBodyParts(data)) || await hasAnimeExposure(data);
     return { nsfw, nsfl: result.label === 'NSFL' };
   });
 }

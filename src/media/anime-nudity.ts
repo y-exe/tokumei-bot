@@ -8,6 +8,7 @@ import { onnxMetadata, parseDetections, type BodyDetection } from './nudity.js';
 
 export const ANIME_REVISION = '0cf62fd6b28213b40ae0c0055f92e7ae6a96bdc2';
 export const ANIME_INPUT_SIZE = 1216;
+export const ANIME_DIRECT_REJECTION_THRESHOLD = 0.6;
 const directory = resolve(process.env.ANIME_NUDITY_MODEL_DIR ?? 'models/anime-censor');
 const checksum = '2c2524824d7d320c5619a0a73702a2e2186f619067c823d211e94f7cfe489cba';
 const modelFile = 'model-s.onnx';
@@ -62,4 +63,32 @@ export async function detectAnimeExposure(data: Buffer): Promise<BodyDetection[]
     console.info(`[anime-nudity] blocked=${detections.length > 0} ms=${(performance.now() - start).toFixed(0)} rssMB=${(process.memoryUsage().rss / 1048576).toFixed(1)}`);
     return detections;
   });
+}
+
+export async function confirmAnimeExposure(
+  data: Buffer,
+  detections: BodyDetection[],
+  detect: (image: Buffer) => Promise<BodyDetection[]> = detectAnimeExposure,
+): Promise<boolean> {
+  if (detections.some(detection => detection.score >= ANIME_DIRECT_REJECTION_THRESHOLD)) return true;
+  if (!detections.length) return false;
+  const image = await sharp(data, { pages: 1, limitInputPixels: 40_000_000, failOn: 'warning' })
+    .flatten({ background: 'white' }).resize(ANIME_INPUT_SIZE, ANIME_INPUT_SIZE, { fit: 'fill', kernel: 'cubic' }).png().toBuffer();
+  for (const detection of detections) {
+    const [x, y, width, height] = detection.box;
+    const size = Math.min(ANIME_INPUT_SIZE, Math.max(160, Math.ceil(Math.max(width, height) * 8)));
+    const left = Math.max(0, Math.min(ANIME_INPUT_SIZE - size, Math.floor(x + width / 2 - size / 2)));
+    const top = Math.max(0, Math.min(ANIME_INPUT_SIZE - size, Math.floor(y + height / 2 - size / 2)));
+    const crop = await sharp(image).extract({ left, top, width: size, height: size }).png().toBuffer();
+    if ((await detect(crop)).some(result => result.label === detection.label)) return true;
+  }
+  return false;
+}
+
+export async function hasAnimeExposure(data: Buffer): Promise<boolean> {
+  const start = performance.now();
+  const detections = await detectAnimeExposure(data);
+  const blocked = await confirmAnimeExposure(data, detections);
+  console.info(`[anime-nudity] 最終判定=${blocked ? '拒否' : '許可'} 再確認=${detections.length > 0 && !detections.some(detection => detection.score >= ANIME_DIRECT_REJECTION_THRESHOLD)} ms=${(performance.now() - start).toFixed(0)} rssMB=${(process.memoryUsage().rss / 1048576).toFixed(1)}`);
+  return blocked;
 }
