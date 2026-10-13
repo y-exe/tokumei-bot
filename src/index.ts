@@ -31,7 +31,7 @@ await initializeAnimeNudity();
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent], makeCache: Options.cacheWithLimits({ ...Options.DefaultMakeCacheSettings, MessageManager: 0 }) });
 const app = new App(client, store, secrets, new MediaService(new SafeHttp(), new WorkQueue(concurrency)));
 const health = healthServer(client, store, Number(process.env.HEALTH_PORT ?? 3000));
-const lookup = process.env.LOOKUP_ADMIN_TOKEN ? lookupServer(store,client,process.env.LOOKUP_ADMIN_TOKEN,Number(process.env.LOOKUP_PORT??8765)) : undefined;
+const lookup = process.env.LOOKUP_TAILSCALE_ORIGIN ? lookupServer(store,client,process.env.LOOKUP_TAILSCALE_ORIGIN,(process.env.LOOKUP_ALLOWED_TAILSCALE_LOGINS??'').split(',').map(login=>login.trim()).filter(Boolean),Number(process.env.LOOKUP_PORT??8765)) : undefined;
 client.on(Events.MessageCreate, message => {
   void guardChannel(message, store, app.panels).catch(() => console.error('匿名チャンネルの通常投稿を確認できませんでした。'));
 });

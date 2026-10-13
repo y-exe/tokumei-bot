@@ -70,6 +70,10 @@ Discordサーバーに匿名投稿機能を追加するBotです。<br>
 
 モデル仕様・設定・検証手順は [安全判定の詳細](docs/media-safety.md) を参照してください。
 
+## 管理者向け照会
+
+管理者向けの匿名投稿者照会は、Tailscale内のHTTPSページで利用できます。追加パスワードは不要です。[lookupの設定](docs/lookup.md)を参照してください。
+
 ## ライセンス
 
 [GPL-3.0](LICENSE)  
