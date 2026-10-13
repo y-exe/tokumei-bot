@@ -1,5 +1,6 @@
 import { test, mock } from 'node:test';
 import https from 'node:https';
+import dns from 'node:dns/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { EventEmitter } from 'node:events';
 import assert from 'node:assert/strict';
@@ -9,6 +10,21 @@ import { isPublicAddress, SafeHttp, WorkQueue, MAX_DOWNLOAD_BYTES } from '../src
 import { MediaService } from '../src/media/service.js';
 import { UserError } from '../src/domain/errors.js';
 import { randomBytes } from 'node:crypto';
+
+test('公開URLのDNS検索は絶対名を使い、検索ドメインを付けず内部IPの混在を拒否する', async () => {
+  const names: string[] = [];
+  const lookupMock = mock.method(dns, 'lookup', async (host: string) => {
+    names.push(host);
+    return host === 'mixed.example.' ? [{ address: '1.1.1.1', family: 4 }, { address: '127.0.0.1', family: 4 }] : [{ address: '127.0.0.1', family: 4 }];
+  });
+  syncBuiltinESMExports();
+  try {
+    const http = new SafeHttp();
+    for (const url of ['https://misskey.io/api/notes/show', 'https://media.misskeyusercontent.jp/a.webp', 'https://already.example./file', 'https://mixed.example/file'])
+      await assert.rejects(http.get(url, 1000), /許可されていません/);
+    assert.deepEqual(names, ['misskey.io.', 'media.misskeyusercontent.jp.', 'already.example.', 'mixed.example.']);
+  } finally { lookupMock.mock.restore(); syncBuiltinESMExports(); }
+});
 
 test('無制限指定でも巨大な応答を拒否し、不正な転送URLでプロセスを落とさない', async () => {
   let malformedRedirect = false;

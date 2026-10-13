@@ -39,11 +39,12 @@ export class SafeHttp {
     if (url.protocol !== 'https:' || url.username || url.password || (url.port && url.port !== '443'))
       throw new UserError('取得できるのは認証情報を含まないHTTPSのURLです。');
     const host = url.hostname.replace(/^\[|\]$/g, '');
+    const dnsHost = host.includes('.') && !host.endsWith('.') ? `${host}.` : host;
     let dnsTimer: ReturnType<typeof setTimeout> | undefined;
     const addresses = await (async () => {
       try {
         return isIP(host) ? [{ address: host, family: isIP(host) }] :
-          await Promise.race([lookup(host, { all: true }), new Promise<never>((_, reject) => {
+          await Promise.race([lookup(dnsHost, { all: true }), new Promise<never>((_, reject) => {
             dnsTimer = setTimeout(() => reject(new UserError('接続先の確認がタイムアウトしました。')), 5000);
             dnsTimer.unref();
           })]);
