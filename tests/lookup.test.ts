@@ -24,16 +24,17 @@ test('lookupはTailscale本人情報で認証し、旧ログイン・CSRF・別�
   await once(server,'listening');const address=server.address() as AddressInfo;assert.equal(address.address,'127.0.0.1');
   const backend=`http://127.0.0.1:${address.port}`;
   const headers={Host:'server.example.ts.net','Tailscale-User-Login':login};
-  const post=(form:Record<string,string>,cookie:string,requestOrigin=origin,requestLogin=login)=>fetch(backend+'/lookup',{method:'POST',headers:{...headers,'Tailscale-User-Login':requestLogin,'Content-Type':'application/x-www-form-urlencoded',Origin:requestOrigin,Cookie:cookie},body:new URLSearchParams(form)});
+  const post=(form:Record<string,string>,cookie:string,requestOrigin=origin,requestLogin=login)=>fetch(backend+'/lookup/search',{method:'POST',headers:{...headers,'Tailscale-User-Login':requestLogin,'Content-Type':'application/x-www-form-urlencoded',Origin:requestOrigin,Cookie:cookie},body:new URLSearchParams(form)});
   try{
-    assert.equal((await fetch(backend,{headers:{Host:headers.Host}})).status,403);
-    assert.equal((await fetch(backend,{headers:{...headers,'Tailscale-User-Login':'tagged-devices'}})).status,403);
-    assert.equal((await fetch(backend,{headers:{...headers,Host:'evil.example'}})).status,403);
+    assert.equal((await fetch(backend+'/lookup/',{headers:{Host:headers.Host}})).status,403);
+    assert.equal((await fetch(backend+'/lookup/',{headers:{...headers,'Tailscale-User-Login':'tagged-devices'}})).status,403);
+    assert.equal((await fetch(backend+'/lookup/',{headers:{...headers,Host:'evil.example'}})).status,403);
     assert.equal((await post({id:'400000000000000001'},'')).status,401);assert.equal(searches,0);
-    for(const path of ['/login','/launch','/open?ticket=old','/logout'])assert.equal((await fetch(backend+path,{headers})).status,404);
-    const homeResponse=await fetch(backend,{headers});assert.equal(homeResponse.status,200);
+    const redirect=await fetch(backend+'/lookup',{headers});assert.equal(redirect.status,308);assert.equal(redirect.headers.get('location'),'/lookup/');
+    for(const path of ['/','/login','/launch','/open?ticket=old','/logout','/other/'])assert.equal((await fetch(backend+path,{headers})).status,404);
+    const homeResponse=await fetch(backend+'/lookup/',{headers});assert.equal(homeResponse.status,200);
     const cookie=homeResponse.headers.get('set-cookie')!;
-    assert.ok(cookie.includes('Secure'));assert.ok(cookie.includes('HttpOnly'));assert.ok(cookie.includes('SameSite=Strict'));
+    assert.ok(cookie.includes('Path=/lookup/'));assert.ok(cookie.includes('Secure'));assert.ok(cookie.includes('HttpOnly'));assert.ok(cookie.includes('SameSite=Strict'));
     const home=await homeResponse.text();assert.ok(!home.includes('password'));assert.ok(!home.includes('name="token"'));
     const csrf=home.match(/name="csrf" value="([a-f0-9]+)"/)![1]!;
     assert.equal((await post({id:'400000000000000001',csrf},cookie,'https://evil.example')).status,403);
@@ -47,7 +48,7 @@ test('lookupはTailscale本人情報で認証し、旧ログイン・CSRF・別�
     const future=Date.now()+30*60_000+1;const clock=mock.method(Date,'now',()=>future);
     try{
       assert.equal((await post({id:'400000000000000001',csrf},cookie)).status,401);
-      const refreshed=await fetch(backend,{headers:{...headers,Cookie:cookie}});assert.equal(refreshed.status,200);assert.ok(refreshed.headers.get('set-cookie'));
+      const refreshed=await fetch(backend+'/lookup/',{headers:{...headers,Cookie:cookie}});assert.equal(refreshed.status,200);assert.ok(refreshed.headers.get('set-cookie'));
     }finally{clock.mock.restore();}
   }finally{server.closeAllConnections();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));}
 });

@@ -24,23 +24,24 @@ export function lookupServer(store:Pick<Store,'lookupAuthor'>,client:Pick<Client
     if(request.headers.host!==address.host || typeof login!=='string' || !allowedLogins.includes(login)){
       send(response,403,'このTailscaleアカウントではアクセスできません。');return;
     }
-    if(request.method==='POST' && request.headers.origin!==origin){send(response,403,'<p>ページを開き直してください。</p><a href="/">検索画面に戻る</a>');return;}
+    if(request.method==='POST' && request.headers.origin!==origin){send(response,403,'<p>ページを開き直してください。</p><a href="/lookup/">検索画面に戻る</a>');return;}
     const path=new URL(request.url??'/',origin).pathname;
-    if(path!=='/' && path!=='/lookup'){send(response,404,'見つかりませんでした。');return;}
-    const cookie=request.headers.cookie?.match(/(?:^|;\s*)lookup_session=([a-f0-9]{64})(?:;|$)/)?.[1];
+    if(request.method==='GET' && path==='/lookup'){response.writeHead(308,{'Location':'/lookup/','Cache-Control':'no-store'});response.end();return;}
+    if(path!=='/lookup/' && path!=='/lookup/search'){send(response,404,'見つかりませんでした。');return;}
+    const cookie=request.headers.cookie?.match(/(?:^|;\s*)lookup_session_v2=([a-f0-9]{64})(?:;|$)/)?.[1];
     let session=cookie?sessions.get(cookie):undefined;
     if(session?.login!==login)session=undefined;
-    if(request.method==='GET' && path==='/'){
+    if(request.method==='GET' && path==='/lookup/'){
       if(!session){
         if(sessions.size>=20)sessions.delete(sessions.keys().next().value!);
         const key=randomBytes(32).toString('hex');session={expires:now+ttl,csrf:randomBytes(32).toString('hex'),login};sessions.set(key,session);
-        response.setHeader('Set-Cookie',`lookup_session=${key}; Secure; HttpOnly; SameSite=Strict; Path=/; Max-Age=1800`);
+        response.setHeader('Set-Cookie',`lookup_session_v2=${key}; Secure; HttpOnly; SameSite=Strict; Path=/lookup/; Max-Age=1800`);
       }
-    }else if(!session){send(response,401,'<p>ページを開き直してください。</p><a href="/">検索画面に戻る</a>');return;}
+    }else if(!session){send(response,401,'<p>ページを開き直してください。</p><a href="/lookup/">検索画面に戻る</a>');return;}
     let result='';
-    if(request.method==='POST' && path==='/lookup'){
+    if(request.method==='POST' && path==='/lookup/search'){
       const form=await read(request);
-      if(form.get('csrf')!==session!.csrf){send(response,403,'<p>ページを開き直してください。</p><a href="/">検索画面に戻る</a>');return;}
+      if(form.get('csrf')!==session!.csrf){send(response,403,'<p>ページを開き直してください。</p><a href="/lookup/">検索画面に戻る</a>');return;}
       const id=(form.get('id')??'').trim();
       if(!/^\d{17,20}$/.test(id)){result='<p>メッセージIDは17〜20桁の数字で入力してください。</p>';}
       else{
@@ -51,8 +52,8 @@ export function lookupServer(store:Pick<Store,'lookupAuthor'>,client:Pick<Client
           result=`<hr><dl><dt>ユーザーID</dt><dd>${escape(author.user_id)}</dd><dt>表示名</dt><dd>${escape(user?.globalName??user?.username??'取得不可')}</dd></dl>`;
         }
       }
-    }else if(request.method!=='GET' || path!=='/'){send(response,405,'この操作は利用できません。');return;}
-    send(response,200,`<p>Tailscaleで認証済み。</p><form method="post" action="/lookup"><input type="hidden" name="csrf" value="${session!.csrf}"><input name="id" placeholder="メッセージID" inputmode="numeric" required><button>検索</button></form>${result}`);
+    }else if(request.method!=='GET' || path!=='/lookup/'){send(response,405,'この操作は利用できません。');return;}
+    send(response,200,`<p>Tailscaleで認証済み。</p><form method="post" action="/lookup/search"><input type="hidden" name="csrf" value="${session!.csrf}"><input name="id" placeholder="メッセージID" inputmode="numeric" required><button>検索</button></form>${result}`);
   })().catch(()=>{if(!response.headersSent)send(response,500,'検索に失敗しました。しばらく待ってからやり直してください。');else response.end();});});
   server.requestTimeout=10_000;server.headersTimeout=10_000;server.maxConnections=10;
   server.listen(port,'127.0.0.1');return server;
