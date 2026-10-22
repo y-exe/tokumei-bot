@@ -1,5 +1,5 @@
 import {
-  ActionRowBuilder, AttachmentBuilder, ButtonStyle, ContainerBuilder, GuildMember, DiscordAPIError,
+  ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, ContainerBuilder, GuildMember, DiscordAPIError,
   MessageFlags, ModalBuilder, PermissionFlagsBits, StringSelectMenuBuilder, ComponentType,
   type Client, type Interaction, type RepliableInteraction, type ModalSubmitInteraction,
 } from 'discord.js';
@@ -7,7 +7,7 @@ import { ZodError } from 'zod';
 import { isBotAdmin } from './domain/permissions.js';
 import { isPostingChannel, type PostingChannel } from './domain/channels.js';
 import { defaults, exportTemplate, importTemplate, presetOverrides, resolveConfig, parseRetention, allowsDirectPosts,isRequestMode, type Config, type Preset } from './domain/config.js';
-import { UserError, errorMessage } from './domain/errors.js';
+import { UserError, MediaSafetyError, errorMessage } from './domain/errors.js';
 import { validateText, type PostInput } from './domain/validation.js';
 import type { Store, ReportNotice } from './infra/store.js';
 import type { SecretBox } from './infra/secrets.js';
@@ -22,6 +22,7 @@ import { Sessions } from './ui/sessions.js';
 import {reportView} from './ui/report.js';
 import {Moderation,punishmentLabels,type Punishment} from './services/moderation.js';
 import { diagnosticCode, diagnosticDetails, parseDiagnosticCode } from './infra/diagnostics.js';
+import { bugReportUrl, reportOperation } from './ui/bug-report.js';
 
 const emptyMentions = { parse: [] as ('users' | 'roles' | 'everyone')[] };
 type UIInteraction = RepliableInteraction;
@@ -74,6 +75,8 @@ export class App {
       else if (interaction.isModalSubmit()) await this.modal(interaction);
       else if (interaction.isButton() || interaction.isAnySelectMenu()) await this.component(interaction);
     } catch (error) {
+      const occurredAt = new Date();
+      let reportCode: string | undefined;
       let message = errorMessage(error);
       let title = '操作を確認してください';
       if (error instanceof ZodError) message = error.issues.map(issue => issue.message).slice(0, 3).join('\n');
@@ -93,10 +96,16 @@ export class App {
         }
         catch { console.error('エラー詳細のDB保存に失敗しました', { code }); }
         console.error('操作を処理できませんでした', { code, action, interactionId: interaction.id, details });
+        reportCode = code;
         message += `\n\nエラーID: \`${code}\``;
       }
-      if (interaction.replied && !interaction.deferred) await interaction.followUp(payload([card(title, message, colors.danger)])).catch(() => undefined);
-      else await this.respond(interaction, [card(title, message, colors.danger)]).catch(() => undefined);
+      const view = card(title, message, colors.danger);
+      if (!(error instanceof MediaSafetyError) && !(error instanceof ZodError)) {
+        view.addActionRowComponents(row(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('バグを報告')
+          .setURL(bugReportUrl(reportOperation(interaction), reportCode, occurredAt))));
+      }
+      if (interaction.replied && !interaction.deferred) await interaction.followUp(payload([view])).catch(() => undefined);
+      else await this.respond(interaction, [view]).catch(() => undefined);
     }
   }
   async command(interaction: import('discord.js').ChatInputCommandInteraction): Promise<void> {

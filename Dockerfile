@@ -1,4 +1,4 @@
-FROM oven/bun:1.3-slim
+FROM oven/bun:1.3-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production
 WORKDIR /app
@@ -10,3 +10,17 @@ RUN bun -e "import { prepareSafetyModels } from './src/media/safety.ts'; import 
 USER bun
 EXPOSE 3000
 CMD ["bun", "--smol", "src/index.ts"]
+
+FROM node:22-bookworm-slim AS test-node
+
+FROM runtime AS test
+USER root
+COPY --from=test-node /usr/local/bin/node /usr/local/bin/node
+ENV NODE_ENV=test
+RUN bun install --frozen-lockfile
+COPY --chown=bun:bun tsconfig.json ./
+COPY --chown=bun:bun tests ./tests
+USER bun
+RUN bun run check && bun run test
+
+FROM runtime AS production

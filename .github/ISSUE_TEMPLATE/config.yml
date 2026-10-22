@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 個人情報・セキュリティに関する報告
+    url: https://github.com/y-exe/tokumei-bot/blob/main/SECURITY.md
+    about: 公開せず、こちらの連絡先へお願いします。

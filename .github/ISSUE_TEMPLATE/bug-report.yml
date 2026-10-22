@@ -1,0 +1,25 @@
+name: バグ報告
+description: 動かない・おかしいと感じたことを教えてください。
+title: "[不具合] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        分かる範囲で大丈夫です。報告内容は公開されるので、個人情報や非公開の投稿は載せないでください。
+  - type: textarea
+    id: problem
+    attributes:
+      label: 何が起きましたか？
+      description: した操作と、困ったことを短く教えてください。画像も貼れます。
+      placeholder: 設定の色を「なし」にして保存したら、エラーが出ました。
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 動作情報（自動入力・任意）
+      description: Botの報告ボタンから来た場合は、そのままで大丈夫です。
+      placeholder: 空欄でも報告できます。
+      render: text
+    validations:
+      required: false

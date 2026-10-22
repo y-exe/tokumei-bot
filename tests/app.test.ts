@@ -6,7 +6,7 @@ import { App } from '../src/app.js';
 import { defaults } from '../src/domain/config.js';
 import { SecretBox } from '../src/infra/secrets.js';
 import { MediaService } from '../src/media/service.js';
-import { UserError } from '../src/domain/errors.js';
+import { UserError, MediaSafetyError } from '../src/domain/errors.js';
 import { z } from 'zod';
 import type { Store } from '../src/infra/store.js';
 import type { Client, RepliableInteraction, ButtonInteraction, ModalSubmitInteraction } from 'discord.js';
@@ -17,7 +17,7 @@ function app() {
     new SecretBox(randomBytes(32).toString('base64')), new MediaService());
 }
 function interaction(overrides: Record<string, unknown> = {}) {
-  return { guildId: 'g', channelId: 'c', user: { id: 'alice' }, member: { roles: [] }, memberPermissions: new PermissionsBitField(0n), ...overrides } as unknown as RepliableInteraction;
+  return { guildId: 'g', channelId: 'c', user: { id: 'alice' }, member: { roles: [] }, memberPermissions: new PermissionsBitField(0n), isCommand:()=>false, ...overrides } as unknown as RepliableInteraction;
 }
 
 test('/setupと案内の埋め込み編集は選択数上限が選択肢数以内の画面を返す', async () => {
@@ -48,6 +48,10 @@ test('処理失敗時は画面と保存詳細に同じエラーコードを付�
   await bot.handle(command as never);
   assert.match(savedCode, /^[a-f0-9]{8}$/); assert.ok(shown.includes('`' + savedCode + '`'));
   assert.ok(!shown.includes('/error'));
+  assert.ok(shown.includes('バグを報告'));
+  const reportUrl = JSON.parse(shown)[0].components.flatMap((component:{components?:unknown[]})=>component.components??[]).find((component:{url?:string})=>component.url)?.url;
+  assert.equal(new URL(reportUrl).searchParams.get('diagnostics')!.split('\n').at(-1), `エラーID: ${savedCode}`);
+  assert.ok(!reportUrl.includes('設定画面の検証に失敗'));
   bot.store.saveDiagnostic = async () => { throw new Error('DB停止'); };
   await bot.handle(command as never);
   assert.ok(shown.includes('エラーID')); assert.ok(shown.includes('処理エラー')); assert.ok(shown.includes('時間をおいて再試行してください。'));
@@ -64,6 +68,29 @@ test('短いエラーIDの保存が衝突した場合は再生成したIDを表�
   await bot.handle(interaction({ id: 'interaction', commandName: 'setup', isRepliable: () => true, isChatInputCommand: () => true, isCommand: () => true }) as never);
   assert.equal(attempted.length, 2);
   assert.ok(shown.includes('`' + attempted[1] + '`'));
+  const reportUrl = JSON.parse(shown)[0].components.flatMap((component:{components?:unknown[]})=>component.components??[]).find((component:{url?:string})=>component.url)?.url;
+  assert.equal(new URL(reportUrl).searchParams.get('diagnostics')!.split('\n').at(-1), `エラーID: ${attempted[1]}`);
+});
+
+test('権限や取得失敗の案内からも報告でき、投稿内容や内部エラーはURLへ含めない', async () => {
+  const bot=app();let shown:unknown;
+  bot.command=async()=>{throw new UserError('非公開のチャンネル <#1407703723907616809> で取得に失敗しました。');};
+  bot.respond=async(_interaction,components)=>{shown=components[0]!.toJSON();};
+  await bot.handle(interaction({isRepliable:()=>true,isChatInputCommand:()=>true,isCommand:()=>true,commandName:'setup'}) as never);
+  const report=JSON.stringify(shown).match(/https:\/\/github[^\"]+/)![0];
+  assert.ok(report.includes('template=bug-report.yml'));assert.ok(!decodeURIComponent(report).includes('1407703723907616809'));
+  assert.ok(!decodeURIComponent(report).includes('エラーID'));
+});
+
+test('返信済みのエラーにも報告ボタンを付け、NSFW拒否と入力形式エラーには付けない', async () => {
+  const bot=app();let response='';
+  bot.store.saveDiagnostic=async()=>{};
+  const request=interaction({isRepliable:()=>true,isChatInputCommand:()=>true,isCommand:()=>true,commandName:'setup',replied:true,deferred:false,
+    followUp:async(value:unknown)=>{response=JSON.stringify(value);}});
+  bot.command=async()=>{throw new Error('詳細');};await bot.handle(request as never);assert.ok(response.includes('バグを報告'));
+  for(const error of [new MediaSafetyError('性的な画像でない場合は管理者にお問い合わせください'),z.string().safeParse(1).error!]){
+    bot.command=async()=>{throw error;};await bot.handle(request as never);assert.ok(!response.includes('バグを報告'));assert.ok(!response.includes('エラーID'));
+  }
 });
 
 test('/errorは新しいIDと保存済みの旧コードを同じサーバー内で照会する', async () => {

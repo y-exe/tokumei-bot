@@ -6,6 +6,6 @@ dist
 coverage
 logs
 detas
-tests
 models
+.local
 .local-test-output.txt
