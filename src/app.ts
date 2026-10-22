@@ -1,10 +1,11 @@
 import {
-  ActionRowBuilder, AttachmentBuilder, ButtonStyle, ChannelType, ContainerBuilder, GuildMember,
+  ActionRowBuilder, AttachmentBuilder, ButtonStyle, ContainerBuilder, GuildMember, DiscordAPIError,
   MessageFlags, ModalBuilder, PermissionFlagsBits, StringSelectMenuBuilder, ComponentType,
-  type Client, type Interaction, type RepliableInteraction, type TextChannel, type ModalSubmitInteraction,
+  type Client, type Interaction, type RepliableInteraction, type ModalSubmitInteraction,
 } from 'discord.js';
 import { ZodError } from 'zod';
 import { isBotAdmin } from './domain/permissions.js';
+import { isPostingChannel, type PostingChannel } from './domain/channels.js';
 import { defaults, exportTemplate, importTemplate, presetOverrides, resolveConfig, parseRetention, allowsDirectPosts,isRequestMode, type Config, type Preset } from './domain/config.js';
 import { UserError, errorMessage } from './domain/errors.js';
 import { validateText, type PostInput } from './domain/validation.js';
@@ -33,7 +34,10 @@ export class App {
   readonly editors = new Sessions<EditorSession>();
   readonly previews = new Sessions<PreviewSession>(10 * 60_000, Number.POSITIVE_INFINITY);
   constructor(readonly client: Client, readonly store: Store, readonly secrets: SecretBox, readonly media: MediaService) {
-    this.posting = new Posting(store, secrets);
+    this.posting = new Posting(store, secrets, async (guildId, channelId) => {
+      const channel = await this.channel(guildId, channelId);
+      return channel.isThread() ? channel.id : undefined;
+    });
     this.panels = new Panels(client,store);
     this.moderation=new Moderation(store,this.posting);
   }
@@ -46,9 +50,15 @@ export class App {
     if (interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) || this.roles(interaction).some(role => settings.config.moderation.managerRoles.includes(role))) return;
     throw new UserError('サーバー管理権限、または設定された管理ロールが必要です。');
   }
-  async channel(guildId: string, channelId: string): Promise<TextChannel> {
-    const channel = await this.client.channels.fetch(channelId);
-    if (!channel || channel.type !== ChannelType.GuildText || channel.guild.id !== guildId) throw new UserError('サーバー内のテキストチャンネルで操作してください。');
+  async channel(guildId: string, channelId: string, purpose = '操作先'): Promise<PostingChannel> {
+    const channel = await this.client.channels.fetch(channelId).catch(error => {
+      if (error instanceof DiscordAPIError && [10003,50001,50013].includes(Number(error.code)))
+        throw new UserError(`${purpose}（<#${channelId}>）を取得できません。チャンネルの存在とBotの閲覧権限を確認してください。`);
+      throw error;
+    });
+    if (!isPostingChannel(channel) || channel.guild.id !== guildId)
+      throw new UserError(`${purpose}（<#${channelId}>）には、このサーバーのテキスト・アナウンスチャンネルかスレッド（フォーラム内の投稿を含む）を指定してください。`);
+    if (channel.isThread() && !channel.parent && channel.parentId) await this.client.channels.fetch(channel.parentId);
     return channel;
   }
   async respond(interaction: UIInteraction, components: ContainerBuilder[]): Promise<void> {
@@ -319,14 +329,15 @@ export class App {
   async saveEditor(interaction: UIInteraction, id: string, session: EditorSession): Promise<void> {
     const channel = await this.channel(session.guildId, session.channelId);
     const me = await channel.guild.members.fetchMe();
-    const required = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory,
+    const required = [PermissionFlagsBits.ViewChannel, channel.isThread() ? PermissionFlagsBits.SendMessagesInThreads : PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory,
       PermissionFlagsBits.AttachFiles, PermissionFlagsBits.EmbedLinks, PermissionFlagsBits.ManageWebhooks];
     if (!allowsDirectPosts(editorConfig(session))) required.push(PermissionFlagsBits.ManageMessages);
-    if (!channel.permissionsFor(me)?.has(required)) throw new UserError('Botに「チャンネルを見る・送信・履歴を見る・ファイル添付・埋め込みリンク・Webhook管理」を付与してください。');
+    if (!channel.permissionsFor(me)?.has(required)) throw new UserError('Botに「チャンネルを見る・送信（スレッド内ではスレッドで送信）・履歴を見る・ファイル添付・埋め込みリンク・Webhook管理」を付与してください。');
     const config = editorConfig(session);
-    for (const target of [config.moderation.reportChannel, config.moderation.logChannel].filter(Boolean)) {
-      const destination = await this.channel(session.guildId, target!);
-      if (!destination.permissionsFor(me)?.has([PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks])) throw new UserError('通報先・処置ログ先にBotが送信できる権限を付与してください。');
+    for (const [purpose, target] of [['通報先', config.moderation.reportChannel], ['処置ログ先', config.moderation.logChannel]] as const) {
+      if (!target) continue;
+      const destination = await this.channel(session.guildId, target, purpose);
+      if (!destination.permissionsFor(me)?.has([PermissionFlagsBits.ViewChannel, destination.isThread() ? PermissionFlagsBits.SendMessagesInThreads : PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks])) throw new UserError(`${purpose}（<#${target}>）にBotが送信できる権限を付与してください。`);
     }
     const affected = session.scope === 'guild' ? await this.store.configuredChannels(session.guildId) : [session.channelId];
     await this.store.saveSettings(session.original, session.scope, session.value, session.owner);

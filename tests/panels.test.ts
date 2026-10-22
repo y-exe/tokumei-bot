@@ -5,7 +5,7 @@ import { Panels } from '../src/services/panels.js';
 import { defaults } from '../src/domain/config.js';
 import type { Store } from '../src/infra/store.js';
 
-function fixture(replace=true) {
+function fixture(replace=true, type=ChannelType.GuildText, archived=false) {
   const actions:string[]=[];let enabled=true;let latest:string|undefined;let panelDeleted=false;
   const config=structuredClone(defaults);config.panel.style='embed';
   const store={settings:async()=>({guildId:'g',channelId:'c',enabled,panelId:panelDeleted?null:'old',config}),
@@ -17,12 +17,21 @@ function fixture(replace=true) {
       if(panelDeleted)throw new Error('Unknown Message');
       return {id:'old'};
     },delete:async(id:string)=>{actions.push('delete:'+id);}}};
-  const client={channels:{fetch:async()=>({type:ChannelType.GuildText,guild:{id:'g'},...channel})}} as unknown as Client;
+  const client={channels:{fetch:async()=>({type,archived,isThread:()=>[ChannelType.PublicThread,ChannelType.PrivateThread,ChannelType.AnnouncementThread].includes(type),guild:{id:'g'},...channel})}} as unknown as Client;
   return {service:new Panels(client,store),actions,config,disable:()=>{enabled=false;},setLatest:(id?:string)=>{latest=id;},deletePanel:()=>{panelDeleted=true;}};
 }
 test('案内の再送は新しい案内を送信・保存してから古い案内だけを削除する',async()=>{
   const f=fixture();await f.service.bump('g','c');
   assert.deepEqual(f.actions,['send:new','save:new','delete:old']);
+});
+
+test('アナウンス・公開と非公開スレッド・フォーラム投稿でも案内を再送できる', async()=>{
+  for(const type of [ChannelType.GuildAnnouncement,ChannelType.PublicThread,ChannelType.PrivateThread,ChannelType.AnnouncementThread]){
+    const f=fixture(true,type);await f.service.bump('g','c');
+    assert.deepEqual(f.actions,['send:new','save:new','delete:old']);
+  }
+  const forum=fixture(true,ChannelType.GuildForum);await assert.rejects(forum.service.bump('g','c'),/再送先/);
+  const archived=fixture(true,ChannelType.PublicThread,true);await archived.service.restore('g','c');assert.deepEqual(archived.actions,[]);
 });
 test('案内がすでに末尾にあるときは再送せずそのまま使う',async()=>{
   const f=fixture();f.setLatest('old');await f.service.bump('g','c');

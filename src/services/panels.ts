@@ -1,4 +1,5 @@
-import { ChannelType, MessageFlags, type Client, type TextChannel } from 'discord.js';
+import { MessageFlags, type Client } from 'discord.js';
+import { isPostingChannel, type PostingChannel } from '../domain/channels.js';
 import type { Store, ChannelSettings } from '../infra/store.js';
 import { SerialQueue } from '../infra/serial.js';
 import { UserError } from '../domain/errors.js';
@@ -23,6 +24,7 @@ export class Panels {
       if (!settings.enabled) return;
       const channel = await this.channel(guildId, channelId);
       if (!channel) return;
+      if (channel.isThread() && channel.archived) return;
       const panel = await this.fetchPanel(channel, settings.panelId);
       if (panel) {
         if (await this.isLatest(channel, settings.panelId)) return;
@@ -31,21 +33,21 @@ export class Panels {
       await this.resend(channel, settings);
     });
   }
-  private async channel(guildId: string, channelId: string): Promise<TextChannel | null> {
+  private async channel(guildId: string, channelId: string): Promise<PostingChannel | null> {
     const channel = await this.client.channels.fetch(channelId).catch(() => undefined);
-    if (!channel || channel.type !== ChannelType.GuildText || channel.guild.id !== guildId) return null;
+    if (!isPostingChannel(channel) || channel.guild.id !== guildId) return null;
     return channel;
   }
-  private async fetchPanel(channel: TextChannel, panelId: string | null) {
+  private async fetchPanel(channel: PostingChannel, panelId: string | null) {
     if (!panelId) return undefined;
     return channel.messages.fetch(panelId).catch(() => undefined);
   }
-  private async isLatest(channel: TextChannel, panelId: string | null): Promise<boolean> {
+  private async isLatest(channel: PostingChannel, panelId: string | null): Promise<boolean> {
     if (!panelId) return false;
     try { return (await channel.messages.fetch({ limit: 1 })).first()?.id === panelId; }
     catch { return false; }
   }
-  private async resend(channel: TextChannel, settings: ChannelSettings): Promise<void> {
+  private async resend(channel: PostingChannel, settings: ChannelSettings): Promise<void> {
     const sent = await channel.send({ ...panelPayload(settings.config), flags: MessageFlags.IsComponentsV2 | MessageFlags.SuppressNotifications });
     let replaced: boolean;
     try { replaced = await this.store.replacePanel(settings, sent.id); }

@@ -1,4 +1,5 @@
-import { AttachmentBuilder, DiscordAPIError, HTTPError, WebhookClient, type TextChannel } from 'discord.js';
+import { AttachmentBuilder, DiscordAPIError, HTTPError, WebhookClient } from 'discord.js';
+import { isWebhookParentChannel, type PostingChannel, type WebhookParentChannel } from '../domain/channels.js';
 import type { Store, StoredPost } from '../infra/store.js';
 import type { SecretBox } from '../infra/secrets.js';
 import { UserError } from '../domain/errors.js';
@@ -24,7 +25,8 @@ export class Posting {
     }
     for(const [operation,at] of this.attempts)if(at<Date.now()-600_000)this.attempts.delete(operation);
   }
-  constructor(readonly store: Store, readonly secrets: SecretBox) {}
+  constructor(readonly store: Store, readonly secrets: SecretBox,
+    readonly threadIdFor: (guildId: string, channelId: string) => Promise<string | undefined> = async () => undefined) {}
   async publish(input: PostInput): Promise<string> {
     return this.queue.run(`${input.guildId}:${input.channelId}`, input.media.reduce((sum, file) => sum + file.data.length, 0), () => this.publishLocked(input));
   }
@@ -43,13 +45,14 @@ export class Posting {
     const content = postContent(linked, input.source, input.replyTo, input.guildId, input.channelId,reply?.anonymous_id, input.videoLinks);
     if (content.length > 2000) throw new UserError('出典・返信リンクを含めて2000文字以内になるように本文を短くしてください。');
     if(settings.config.policy.retentionDays===0)return this.publishWithoutLog(input,settings.config,settings.webhook,content);
+    const threadId = await this.threadIdFor(input.guildId, input.channelId);
     const reserved = await this.store.reserve(input, settings.config, settings.webhook);
     const webhook = new WebhookClient({ url: this.secrets.open(settings.webhook) });
     let delivery: { messageId: string; media: StoredPost['media'] } | undefined;
     try {
       const sent = await webhook.send({ username: settings.config.identity.showId ? `匿名 ${String(reserved.anonymous_id).padStart(3, '0')}` : '匿名',
         avatarURL: `https://cdn.discordapp.com/embed/avatars/${reserved.avatar}.png`,
-        content: content || undefined, allowedMentions: { parse: [] },
+        content: content || undefined, allowedMentions: { parse: [] }, threadId,
         files: input.media.map(file => new AttachmentBuilder(file.data, { name: file.name })),
       });
       delivery = { messageId: sent.id, media: sent.attachments.map((attachment, index) => ({ url: attachment.url, name: attachment.filename, kind: input.media[index]?.kind ?? 'image' })) };
@@ -67,6 +70,7 @@ export class Posting {
     return content.replace(pattern,(match,number:string)=>{const target=targets.get(Number(number));return target?`[${match}](https://discord.com/channels/${guildId}/${channelId}/${target})`:match;});
   }
   private async publishWithoutLog(input: PostInput, config: Config, credential: string, content: string): Promise<string> {
+    const threadId = await this.threadIdFor(input.guildId, input.channelId);
     const now=Date.now();
     for(const [operation,at] of this.attempts)if(at<now-600_000)this.attempts.delete(operation);
     if(this.attempts.has(input.operationId))throw new UserError('この投稿は処理済みです。再送は行いません。');
@@ -88,7 +92,7 @@ export class Posting {
     this.attempts.set(input.operationId,now);
     const webhook=new WebhookClient({url:this.secrets.open(credential)});
     try{
-      const sent=await webhook.send({username:config.identity.showId?`匿名 ${String(anonymousId).padStart(3,'0')}`:'匿名',avatarURL:`https://cdn.discordapp.com/embed/avatars/${avatar}.png`,content:content||undefined,allowedMentions:{parse:[]},files:input.media.map(file=>new AttachmentBuilder(file.data,{name:file.name}))});
+      const sent=await webhook.send({username:config.identity.showId?`匿名 ${String(anonymousId).padStart(3,'0')}`:'匿名',avatarURL:`https://cdn.discordapp.com/embed/avatars/${avatar}.png`,content:content||undefined,allowedMentions:{parse:[]},threadId,files:input.media.map(file=>new AttachmentBuilder(file.data,{name:file.name}))});
       return `https://discord.com/channels/${input.guildId}/${input.channelId}/${sent.id}`;
     }catch(error){throw deliveryError(error, true);}
     finally{webhook.destroy();}
@@ -102,7 +106,7 @@ export class Posting {
     if (!post.delivery_webhook) throw new UserError('送信時の情報が不足しているため、自動確認できません。チャンネルを確認してください。');
     const webhook = new WebhookClient({ url: this.secrets.open(post.delivery_webhook) });
     try {
-      const message = await webhook.fetchMessage(post.message_id);
+      const message = await webhook.fetchMessage(post.message_id, { threadId: await this.threadIdFor(guildId, channelId) });
       if (message.channel_id !== channelId || message.webhook_id !== webhook.id) throw new UserError('送信先を確認できませんでした。再送は行いません。');
       await this.store.markSent(operationId, post.message_id, message.attachments.map(attachment => ({
         url: attachment.url, name: attachment.filename,
@@ -118,7 +122,7 @@ export class Posting {
     if (post.layout === 'legacy' && !post.content && !post.media.length && post.legacy_webhook) {
       const webhook = new WebhookClient({ url: this.secrets.open(post.legacy_webhook) });
       try {
-        const message = await webhook.fetchMessage(messageId);
+        const message = await webhook.fetchMessage(messageId, { threadId: await this.threadIdFor(guildId, channelId) });
         post.content = message.content;
         post.media = message.attachments.map(attachment => ({ url: attachment.url, name: attachment.filename, kind: attachment.content_type?.startsWith('video/') ? 'video' : 'image' }));
         await this.store.hydratePost(guildId, channelId, messageId, post.content, post.media);
@@ -134,14 +138,15 @@ export class Posting {
     if (!credential) throw new UserError('投稿用Webhookが見つかりません。管理者に連絡してください。');
     const webhook = new WebhookClient({ url: this.secrets.open(credential) });
     try {
-      const message = await webhook.fetchMessage(messageId);
+      const threadId = await this.threadIdFor(guildId, channelId);
+      const message = await webhook.fetchMessage(messageId, { threadId });
       const linked=settings.config.policy.retentionDays===0?content:await this.linkReferences(content,guildId,channelId,post.created_at);
       const reply=post.reply_to?await this.store.post(guildId,channelId,post.reply_to):null;
       const previousNumber=message.content?.match(/^\[>>(\d{1,4})\]/)?.[1];
       const rendered = post.layout === 'legacy' ? linked : postContent(linked, post.source ?? undefined, post.reply_to ?? undefined, guildId, channelId,reply?.anonymous_id??(previousNumber?Number(previousNumber):undefined), post.videoLinks);
       if (post.layout !== 'v2' && rendered.length > 2000) throw new UserError('出典・返信リンクを含めて2000文字以内にしてください。');
-      await webhook.editMessage(messageId, post.layout !== 'v2' ? { content: rendered,
-        allowedMentions: { parse: [] } } : { components: [postCard(rendered, post.media, settings.config.panel.color)],
+      await webhook.editMessage(messageId, post.layout !== 'v2' ? { content: rendered, threadId,
+        allowedMentions: { parse: [] } } : { components: [postCard(rendered, post.media, settings.config.panel.color)], threadId,
         withComponents: true, attachments: message.attachments.map(attachment => ({ id: attachment.id, filename: attachment.filename })), allowedMentions: { parse: [] } });
       await this.store.updatePost(guildId, channelId, messageId, content);
     } finally { webhook.destroy(); }
@@ -160,23 +165,32 @@ export class Posting {
     const credential = post.legacy_webhook ?? post.delivery_webhook ?? settings.webhook;
     if (!credential) throw new UserError('投稿用Webhookが見つかりません。');
     const webhook = new WebhookClient({ url: this.secrets.open(credential) });
-    try { await webhook.deleteMessage(messageId); await this.store.deletePost(guildId, channelId, messageId); }
+    try { await webhook.deleteMessage(messageId, await this.threadIdFor(guildId, channelId)); await this.store.deletePost(guildId, channelId, messageId); }
     finally { webhook.destroy(); }
   }
-  async createWebhook(channel: TextChannel): Promise<string> {
+  async createWebhook(channel: PostingChannel): Promise<string> {
+    const parent = channel.isThread() ? channel.parent ?? await channel.client.channels.fetch(channel.parentId!) : channel;
+    if (!isWebhookParentChannel(parent)) throw new UserError('スレッドの親チャンネルでWebhookを作成できません。');
+    return this.queue.run(`webhook:${parent.id}`, 0, () => this.createChannelWebhook(channel, parent));
+  }
+  private async createChannelWebhook(channel: PostingChannel, parent: WebhookParentChannel): Promise<string> {
     const settings = await this.store.settings(channel.guild.id, channel.id, true);
     if (settings.webhook) {
       const existing = new WebhookClient({ url: this.secrets.open(settings.webhook) });
       try {
         const webhook = await channel.client.fetchWebhook(existing.id, existing.token);
-        if (webhook.channelId !== channel.id) throw new UserError('投稿用Webhookの送信先が一致しません。管理者に設定を確認してもらってください。');
+        if (webhook.channelId !== parent.id) throw new UserError('投稿用Webhookの送信先が一致しません。管理者に設定を確認してもらってください。');
         return settings.webhook;
       } catch (error) {
         if (!(error instanceof DiscordAPIError && (error.code === 10015 || error.code === 50027)) &&
             !((error instanceof DiscordAPIError || error instanceof HTTPError) && error.status === 401)) throw error;
       } finally { existing.destroy(); }
     }
-    const webhook = await channel.createWebhook({ name: '匿名投稿', reason: '匿名Botの初期設定' });
+    if (channel.isThread()) {
+      const shared = (await parent.fetchWebhooks()).find(webhook => webhook.owner?.id === channel.client.user?.id && webhook.name === '匿名投稿' && !!webhook.token);
+      if (shared) return this.secrets.seal(shared.url);
+    }
+    const webhook = await parent.createWebhook({ name: '匿名投稿', reason: '匿名Botの初期設定' });
     if (!webhook.url) throw new UserError('Webhookを作成できませんでした。');
     return this.secrets.seal(webhook.url);
   }

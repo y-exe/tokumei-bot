@@ -54,11 +54,11 @@ export function managementView(id: string, session: EditorSession): ContainerBui
   if (config.policy.allowedRoles.length) allowed.setDefaultRoles(config.policy.allowedRoles);
   menu.addTextDisplayComponents(text('**投稿できるロール**'));
   menu.addActionRowComponents(new ActionRowBuilder<RoleSelectMenuBuilder>().addComponents(allowed));
-  const channel = new ChannelSelectMenuBuilder().setCustomId(`cfg:${id}:reportchannel`).setChannelTypes(ChannelType.GuildText).setMinValues(0).setMaxValues(1).setPlaceholder('通報を受け取るチャンネル');
+  const channel = new ChannelSelectMenuBuilder().setCustomId(`cfg:${id}:reportchannel`).setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement).setMinValues(0).setMaxValues(1).setPlaceholder('通報を受け取るチャンネル');
   if (config.moderation.reportChannel) channel.setDefaultChannels(config.moderation.reportChannel);
   menu.addTextDisplayComponents(text('**通報先**'));
   menu.addActionRowComponents(new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(channel));
-  const log = new ChannelSelectMenuBuilder().setCustomId(`cfg:${id}:logchannel`).setChannelTypes(ChannelType.GuildText).setMinValues(0).setMaxValues(1).setPlaceholder('処置ログのチャンネル（任意）');
+  const log = new ChannelSelectMenuBuilder().setCustomId(`cfg:${id}:logchannel`).setChannelTypes(ChannelType.GuildText, ChannelType.GuildAnnouncement).setMinValues(0).setMaxValues(1).setPlaceholder('処置ログのチャンネル（任意）');
   if (config.moderation.logChannel) log.setDefaultChannels(config.moderation.logChannel);
   menu.addTextDisplayComponents(text('**処置ログ先**'));
   menu.addActionRowComponents(new ActionRowBuilder<ChannelSelectMenuBuilder>().addComponents(log));

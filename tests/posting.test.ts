@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { PGLiteSocketServer } from '@electric-sql/pglite-socket';
-import { DiscordAPIError, MessageFlags, WebhookClient, type TextChannel } from 'discord.js';
+import { DiscordAPIError, MessageFlags, WebhookClient, ChannelType, Collection, type TextChannel } from 'discord.js';
+import type { PostingChannel } from '../src/domain/channels.js';
 import { Store } from '../src/infra/store.js';
 import { SecretBox } from '../src/infra/secrets.js';
 import { Posting } from '../src/services/posting.js';
@@ -185,7 +186,7 @@ test('保存0の送信拒否では具体的な理由を表示し、同じ操作�
 test('再設置では有効なWebhookを維持し、削除済みだけを作り直す',async()=>{
   const credential=(await store.settings(guild,channel,true)).webhook!;
   let creates=0;let failure:Error|undefined;
-  const destination={id:channel,guild:{id:guild},client:{fetchWebhook:async()=>{if(failure)throw failure;return {channelId:channel};}},createWebhook:async()=>{creates++;return {url:`https://discord.com/api/webhooks/500000000000000012/${'b'.repeat(68)}`};}} as unknown as TextChannel;
+  const destination={id:channel,type:ChannelType.GuildText,isThread:()=>false,guild:{id:guild},client:{fetchWebhook:async()=>{if(failure)throw failure;return {channelId:channel};}},createWebhook:async()=>{creates++;return {url:`https://discord.com/api/webhooks/500000000000000012/${'b'.repeat(68)}`};}} as unknown as TextChannel;
   assert.equal(await posting.createWebhook(destination),credential);assert.equal(creates,0);
   failure=new DiscordAPIError({code:10015,message:'Unknown Webhook'},10015,404,'GET','https://discord.com/api/webhooks/secret',{});
   const replacement=await posting.createWebhook(destination);
@@ -194,4 +195,49 @@ test('再設置では有効なWebhookを維持し、削除済みだけを作り�
   await assert.rejects(posting.createWebhook(destination),/timeout/);assert.equal(creates,1);
   failure=new DiscordAPIError({code:50013,message:'Missing Permissions'},50013,403,'GET','https://discord.com/api/webhooks/secret',{});
   await assert.rejects(posting.createWebhook(destination),/Missing Permissions/);assert.equal(creates,1);
+});
+
+test('スレッドへの送信・本人編集・削除・送信照合にスレッドIDを渡し、保存0でも親へ誤送信しない', async()=>{
+  const credential=(await store.settings(guild,channel,true)).webhook!;
+  const threaded=new Posting(store,secrets,async(_guild,id)=>id);
+  const requests:unknown[]=[];
+  const fetched=mock.method(WebhookClient.prototype,'fetchMessage',async(_id:string,options:unknown)=>{
+    requests.push(options);return {channel_id:'200000000000000031',webhook_id:'500000000000000010',attachments:[]};
+  });
+  const deleted=mock.method(WebhookClient.prototype,'deleteMessage',async(_id:string,threadId?:string)=>{requests.push({threadId});});
+  try{
+    for(const [target,retention] of [['200000000000000031',null],['200000000000000032',0]] as const){
+      await store.saveSettings(await store.settings(guild,target,true),'channel',{policy:{cooldown:0,retentionDays:retention}},user);
+      await store.setPanel(guild,target,'panel',credential);
+      const link=await threaded.publish({...post('thread-'+target),channelId:target});
+      const messageId=link.split('/').at(-1)!;
+      assert.equal((sent.at(-1) as {threadId:string}).threadId,target);
+      if(retention===null){
+        await threaded.edit(guild,target,messageId,user,'スレッド内の変更');
+        assert.equal((edited.at(-1) as {threadId:string}).threadId,target);
+        await store.pool.query("UPDATE v2_posts SET status='uncertain' WHERE message_id=$1",[messageId]);
+        assert.equal(await threaded.reconcile(guild,target,user,'thread-'+target),link);
+        await threaded.remove(guild,target,messageId,user);
+        assert.equal(requests.length,3);
+        assert.ok(requests.every(options=>(options as {threadId:string}).threadId===target));
+      }
+    }
+  }finally{fetched.mock.restore();deleted.mock.restore();}
+});
+
+test('同じ親のスレッドとフォーラム投稿ではWebhookを共有し、再設置でも親を検証する',async()=>{
+  let creates=0;
+  const hooks=new Collection<string,{id:string;owner:{id:string};name:string;token:string;url:string}>();
+  const parent={id:'200000000000000040',type:ChannelType.GuildForum,fetchWebhooks:async()=>hooks,createWebhook:async()=>{
+    creates++;const webhook={id:'500000000000000040',owner:{id:'bot'},name:'匿名投稿',token:'c'.repeat(68),url:`https://discord.com/api/webhooks/500000000000000040/${'c'.repeat(68)}`};hooks.set(webhook.id,webhook);return webhook;
+  }};
+  const thread=(id:string)=>({id,type:ChannelType.PublicThread,isThread:()=>true,parent,guild:{id:guild},client:{user:{id:'bot'},fetchWebhook:async()=>({channelId:parent.id})}}) as unknown as PostingChannel;
+  const first=thread('200000000000000041');const second=thread('200000000000000042');
+  const credentials=await Promise.all([posting.createWebhook(first),posting.createWebhook(second)]);
+  assert.equal(creates,1);assert.equal(secrets.open(credentials[0]!),secrets.open(credentials[1]!));
+  await store.saveSettings(await store.settings(guild,first.id,true),'channel',{},user);
+  await store.setPanel(guild,first.id,'panel',credentials[0]!);
+  assert.equal(await posting.createWebhook(first),credentials[0]);assert.equal(creates,1);
+  first.client.fetchWebhook=async()=>({channelId:'other'}) as never;
+  await assert.rejects(posting.createWebhook(first),/送信先が一致しません/);
 });

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { PermissionFlagsBits, PermissionsBitField, ComponentType } from 'discord.js';
+import { PermissionFlagsBits, PermissionsBitField, ComponentType, ChannelType } from 'discord.js';
 import { App } from '../src/app.js';
 import { defaults } from '../src/domain/config.js';
 import { SecretBox } from '../src/infra/secrets.js';
@@ -95,6 +95,40 @@ test('管理操作はサーバー管理権限か指定されたBot管理者を�
   await assert.doesNotReject(bot.requireManager(interaction({ memberPermissions: new PermissionsBitField(PermissionFlagsBits.ManageGuild) })));
   await assert.doesNotReject(bot.requireManager(interaction({ user: { id: '483307286513582090' } })));
   await assert.rejects(bot.requireManager(interaction({ user: { id: '483307286513582091' } })), /管理権限/);
+});
+
+test('通常チャンネルの保存ではアナウンスの処置ログ先も受け付け、問題のある設定先を区別する', async () => {
+  const bot=app();let saved=0;let logType=ChannelType.GuildAnnouncement;
+  const logId='200000000000000099';
+  const config=structuredClone(defaults);config.moderation.logChannel=logId;
+  const channel={id:'c',type:ChannelType.GuildText,guild:{id:'g',members:{fetchMe:async()=>({})}},isThread:()=>false,
+    permissionsFor:()=>new PermissionsBitField(PermissionsBitField.All),send:async()=>({id:'new'})};
+  bot.client.channels={fetch:async(id:string)=>id===logId?{...channel,id,type:logType}:channel} as never;
+  bot.store.saveSettings=async()=>{saved++;};bot.store.setPanel=async()=>{};
+  bot.posting.createWebhook=async()=> 'credential';bot.respond=async()=>{};
+  const session={owner:'alice',guildId:'g',channelId:'c',scope:'channel' as const,original:snapshot,value:config,installing:false};
+  await bot.saveEditor(interaction(),'unused',session);assert.equal(saved,1);
+  logType=ChannelType.GuildForum;
+  await assert.rejects(bot.saveEditor(interaction(),'unused',session),/処置ログ先（<#200000000000000099>）/);
+  assert.equal(saved,1);
+});
+
+test('スレッドとフォーラム内の投稿で保存し、親フォーラムや別サーバーは対象外にする', async () => {
+  for (const type of [ChannelType.PublicThread,ChannelType.PrivateThread,ChannelType.AnnouncementThread]) {
+    const bot=app();let saved=0;
+    const permissions=new PermissionsBitField(PermissionsBitField.All).remove([PermissionFlagsBits.SendMessages,PermissionFlagsBits.Administrator]);
+    const channel={id:'c',type,guild:{id:'g',members:{fetchMe:async()=>({})}},isThread:()=>true,
+      permissionsFor:()=>permissions,send:async()=>({id:'new'})};
+    bot.client.channels={fetch:async()=>channel} as never;
+    bot.store.saveSettings=async()=>{saved++;};bot.store.setPanel=async()=>{};
+    bot.posting.createWebhook=async()=> 'credential';bot.respond=async()=>{};
+    const session={owner:'alice',guildId:'g',channelId:'c',scope:'channel' as const,original:snapshot,value:{},installing:false};
+    await bot.saveEditor(interaction(),'unused',session);assert.equal(saved,1);
+    assert.equal(await bot.posting.threadIdFor('g','c'),'c');
+    await assert.rejects(bot.channel('other','c'),/このサーバー/);
+    permissions.remove(PermissionFlagsBits.SendMessagesInThreads);
+    await assert.rejects(bot.saveEditor(interaction(),'unused',session),/スレッドで送信/);
+  }
 });
 
 test('Bot管理者はDiscord管理権限なしでサーバー標準の編集とエラー詳細を利用できる', async () => {
