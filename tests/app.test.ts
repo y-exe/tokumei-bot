@@ -46,11 +46,37 @@ test('処理失敗時は画面と保存詳細に同じエラーコードを付�
   bot.respond = async (_interaction, components) => { shown = JSON.stringify(components.map(component => component.toJSON())); };
   const command = interaction({ id: 'interaction', commandName: 'setup', isRepliable: () => true, isChatInputCommand: () => true, isCommand: () => true });
   await bot.handle(command as never);
-  assert.match(savedCode, /^ERR-[A-F0-9]{16}$/); assert.ok(shown.includes('`' + savedCode + '`'));
+  assert.match(savedCode, /^[a-f0-9]{8}$/); assert.ok(shown.includes('`' + savedCode + '`'));
   assert.ok(!shown.includes('/error'));
   bot.store.saveDiagnostic = async () => { throw new Error('DB停止'); };
   await bot.handle(command as never);
-  assert.ok(shown.includes('エラーコード'));
+  assert.ok(shown.includes('エラーID')); assert.ok(shown.includes('処理エラー')); assert.ok(shown.includes('時間をおいて再試行してください。'));
+});
+
+test('短いエラーIDの保存が衝突した場合は再生成したIDを表示する', async () => {
+  const bot = app(); const attempted: string[] = []; let shown = '';
+  bot.command = async () => { throw new Error('処理失敗'); };
+  bot.store.saveDiagnostic = async code => {
+    attempted.push(code);
+    if (attempted.length === 1) throw Object.assign(new Error('重複ID'), { code: '23505' });
+  };
+  bot.respond = async (_interaction, components) => { shown = JSON.stringify(components.map(component => component.toJSON())); };
+  await bot.handle(interaction({ id: 'interaction', commandName: 'setup', isRepliable: () => true, isChatInputCommand: () => true, isCommand: () => true }) as never);
+  assert.equal(attempted.length, 2);
+  assert.ok(shown.includes('`' + attempted[1] + '`'));
+});
+
+test('/errorは新しいIDと保存済みの旧コードを同じサーバー内で照会する', async () => {
+  const bot = app(); let shown = '';
+  bot.respond = async (_interaction, components) => { shown = JSON.stringify(components.map(component => component.toJSON())); };
+  for (const [input, expected] of [['0A4DCAF0', '0a4dcaf0'], ['err-0123456789abcdef', 'ERR-0123456789ABCDEF']]) {
+    bot.store.diagnostic = async (code, guild) => {
+      assert.equal(code, expected); assert.equal(guild, 'g');
+      return { code, action: 'setup', details: '詳細テスト', created_at: new Date() };
+    };
+    await bot.command(interaction({ commandName: 'error', memberPermissions: new PermissionsBitField(PermissionFlagsBits.ManageGuild), deferReply: async () => {}, options: { getString: () => input } }) as never);
+    assert.ok(shown.includes('詳細テスト'));
+  }
 });
 
 test('想定内の拒否と入力エラーにはエラーコードや照会案内を表示・保存しない', async () => {
@@ -60,7 +86,7 @@ test('想定内の拒否と入力エラーにはエラーコードや照会案�
   for (const error of [new UserError('性的な画像でない場合は管理者にお問い合わせください'), z.string().safeParse(123).error!]) {
     bot.command = async () => { throw error; };
     await bot.handle(interaction({ id: 'i', commandName: 'setup', isRepliable: () => true, isChatInputCommand: () => true }) as never);
-    assert.ok(!shown.includes('エラーコード')); assert.ok(!shown.includes('/error')); assert.equal(saved, false);
+    assert.ok(!shown.includes('エラーコード')); assert.ok(!shown.includes('エラーID')); assert.ok(!shown.includes('処理エラー')); assert.ok(!shown.includes('/error')); assert.equal(saved, false);
   }
 });
 test('管理操作は実行時に権限を確認し、サーバー管理権限だけを無条件で許可する', async () => {

@@ -1,11 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { diagnosticCode, diagnosticDetails } from '../src/infra/diagnostics.js';
+import { diagnosticCode, diagnosticDetails, parseDiagnosticCode } from '../src/infra/diagnostics.js';
 
 test('エラーコードは照会可能な形式で重複しない', () => {
   const codes = Array.from({ length: 100 }, diagnosticCode);
   assert.equal(new Set(codes).size, 100);
-  assert.ok(codes.every(code => /^ERR-[A-F0-9]{16}$/.test(code)));
+  assert.ok(codes.every(code => /^[a-f0-9]{8}$/.test(code)));
+});
+
+test('新しいエラーIDと保存済みの旧コードを検索できる形式にする', () => {
+  assert.equal(parseDiagnosticCode(' 0A4DCAF0 '), '0a4dcaf0');
+  assert.equal(parseDiagnosticCode('err-0123456789abcdef'), 'ERR-0123456789ABCDEF');
+  for (const value of ['1234567', '123456789', 'ERR-0a4dcaf0', 'abcdefgh', '']) assert.equal(parseDiagnosticCode(value), undefined);
 });
 test('エラー詳細は原因とコードを残しトークンとURLを秘匿する', () => {
   const previous = process.env.DIAGNOSTIC_TEST_TOKEN;

@@ -1,6 +1,12 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 
-export function diagnosticCode(): string { return `ERR-${randomUUID().replaceAll('-', '').slice(0, 16).toUpperCase()}`; }
+export function diagnosticCode(): string { return randomBytes(4).toString('hex'); }
+export function parseDiagnosticCode(value: string): string | undefined {
+  const code = value.trim();
+  if (/^[a-f0-9]{8}$/i.test(code)) return code.toLowerCase();
+  if (/^ERR-[a-f0-9]{16}$/i.test(code)) return code.toUpperCase();
+  return undefined;
+}
 export function diagnosticDetails(error: unknown): string {
   const seen = new Set<unknown>();
   const describe = (value: unknown, depth: number): string => {
