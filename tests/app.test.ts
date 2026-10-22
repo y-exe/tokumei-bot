@@ -99,15 +99,20 @@ test('管理操作はサーバー管理権限か指定されたBot管理者を�
 
 test('通常チャンネルの保存ではアナウンスの処置ログ先も受け付け、問題のある設定先を区別する', async () => {
   const bot=app();let saved=0;let logType=ChannelType.GuildAnnouncement;
+  const logPermissions=new PermissionsBitField([PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages]);
   const logId='200000000000000099';
   const config=structuredClone(defaults);config.moderation.logChannel=logId;
   const channel={id:'c',type:ChannelType.GuildText,guild:{id:'g',members:{fetchMe:async()=>({})}},isThread:()=>false,
     permissionsFor:()=>new PermissionsBitField(PermissionsBitField.All),send:async()=>({id:'new'})};
-  bot.client.channels={fetch:async(id:string)=>id===logId?{...channel,id,type:logType}:channel} as never;
+  bot.client.channels={fetch:async(id:string)=>id===logId?{...channel,id,type:logType,permissionsFor:()=>logPermissions}:channel} as never;
   bot.store.saveSettings=async()=>{saved++;};bot.store.setPanel=async()=>{};
   bot.posting.createWebhook=async()=> 'credential';bot.respond=async()=>{};
   const session={owner:'alice',guildId:'g',channelId:'c',scope:'channel' as const,original:snapshot,value:config,installing:false};
   await bot.saveEditor(interaction(),'unused',session);assert.equal(saved,1);
+  logPermissions.remove(PermissionFlagsBits.SendMessages);
+  await assert.rejects(bot.saveEditor(interaction(),'unused',session),/処置ログ先.*メッセージを送信/);
+  assert.equal(saved,1);
+  logPermissions.add(PermissionFlagsBits.SendMessages);
   logType=ChannelType.GuildForum;
   await assert.rejects(bot.saveEditor(interaction(),'unused',session),/処置ログ先（<#200000000000000099>）/);
   assert.equal(saved,1);

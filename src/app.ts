@@ -337,7 +337,13 @@ export class App {
     for (const [purpose, target] of [['通報先', config.moderation.reportChannel], ['処置ログ先', config.moderation.logChannel]] as const) {
       if (!target) continue;
       const destination = await this.channel(session.guildId, target, purpose);
-      if (!destination.permissionsFor(me)?.has([PermissionFlagsBits.ViewChannel, destination.isThread() ? PermissionFlagsBits.SendMessagesInThreads : PermissionFlagsBits.SendMessages, PermissionFlagsBits.EmbedLinks])) throw new UserError(`${purpose}（<#${target}>）にBotが送信できる権限を付与してください。`);
+      const permissions = destination.permissionsFor(me);
+      const required = [
+        ['チャンネルを見る', PermissionFlagsBits.ViewChannel],
+        [destination.isThread() ? 'スレッドでメッセージを送信' : 'メッセージを送信', destination.isThread() ? PermissionFlagsBits.SendMessagesInThreads : PermissionFlagsBits.SendMessages],
+      ] as const;
+      const missing = required.filter(([, permission]) => !permissions?.has(permission)).map(([name]) => name);
+      if (missing.length) throw new UserError(`${purpose}（<#${target}>）でBotに「${missing.join('・')}」を許可してください。`);
     }
     const affected = session.scope === 'guild' ? await this.store.configuredChannels(session.guildId) : [session.channelId];
     await this.store.saveSettings(session.original, session.scope, session.value, session.owner);
