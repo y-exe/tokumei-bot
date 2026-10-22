@@ -6,8 +6,8 @@ import type { OwnedSession } from './sessions.js';
 export interface PreviewSession extends OwnedSession {
   files: MediaFile[]; text: string; source: string; warnings: string[]; selected: number[]; sending: boolean; videoLinks: string[];
 }
-export function postCard(content: string, media: { name: string }[], color: number): ContainerBuilder {
-  const result = new ContainerBuilder().setAccentColor(color);
+export function postCard(content: string, media: { name: string }[], color: number | null): ContainerBuilder {
+  const result = new ContainerBuilder().setAccentColor(color ?? undefined);
   if (content) result.addTextDisplayComponents(text(content));
   if (media.length) result.addMediaGalleryComponents(new MediaGalleryBuilder().addItems(...media.map(file => new MediaGalleryItemBuilder().setURL(`attachment://${file.name}`))));
   return result;

@@ -44,6 +44,22 @@ test('旧表示設定を読み込んでも文面・色を保ったV2案内と共
   assert.deepEqual(customIds(body.components.map(component=>component.toJSON())),customIds(panel(defaults).toJSON()));
 });
 
+test('案内の色なしは継承で上書きされず、プレビューと設定JSONにも保持される', () => {
+  const overrides = { panel: { color: null } };
+  const config = resolveConfig(defaults, overrides);
+  assert.equal(config.panel.color, null);
+  assert.equal(panel(config).toJSON().accent_color, undefined);
+  assert.equal(panel(config, true).toJSON().accent_color, undefined);
+  assert.equal(postCard('本文', [], null).toJSON().accent_color, undefined);
+  assert.deepEqual(importTemplate(JSON.parse(exportTemplate(overrides)), defaults), overrides);
+  const modal = editorModal('session', 'appearance', config).toJSON();
+  const color = flatten(modal).find(item => item.custom_id === 'color')!;
+  assert.equal(color.required, false);
+  assert.equal(color.value, undefined);
+  assert.doesNotThrow(() => editorModal('session', 'appearance', defaults).toJSON());
+  assert.equal(panel(resolveConfig(config, { panel: { color: 0 } })).toJSON().accent_color, 0);
+});
+
 test('すべての投稿モードで共通の規約リンクをボタン直下に置き、補足offでも消さない',()=>{
   for(const preset of ['chat','image','upload','request'] as const){
     const config=resolveConfig(defaults,{...presetOverrides(preset),panel:{metadata:false,footer:'任意の補足'}});

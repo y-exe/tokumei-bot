@@ -413,8 +413,10 @@ export class App {
           editSection(copy,'panel',changes);break;
         }
         case 'appearance': {
-          if (!/^#[0-9a-f]{6}$/i.test(field('color'))) throw new UserError('色は #5865f2 のように入力してください。');
-          editSection(copy, 'panel', { title: field('title'), description: field('description'), color: parseInt(field('color').slice(1), 16), footer: field('footer') }); break;
+          const color = field('color').trim();
+          const noColor = color === '' || color === 'なし';
+          if (!noColor && !/^#[0-9a-f]{6}$/i.test(color)) throw new UserError('色は #5865f2 の形式か「なし」を入力してください。空欄でも解除できます。');
+          editSection(copy, 'panel', { title: field('title'), description: field('description'), color: noColor ? null : parseInt(color.slice(1), 16), footer: field('footer') }); break;
         }
         case 'images': editSection(copy, 'panel', { image: field('image'), thumbnail: field('thumbnail') }); break;
         case 'labels': editSection(copy, 'panel', { textLabel: field('textLabel'), imageLabel: field('imageLabel'), urlLabel: field('urlLabel'), helpLabel: field('helpLabel'), ...(field('urlLabel')!==editorConfig(copy).panel.urlLabel?{urlAutoLabel:false}:{}) }); break;

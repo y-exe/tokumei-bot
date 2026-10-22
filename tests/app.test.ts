@@ -207,6 +207,24 @@ test('ボタン色のモーダル選択は下書きだけを更新し、不正�
   await assert.rejects(bot.modal(submit()));assert.deepEqual(session.value,before);assert.equal(updates,1);
 });
 
+test('案内の色は空欄と「なし」で解除でき、不正入力では下書きを変更しない', async () => {
+  const bot = app();
+  const id = bot.editors.create({owner:'alice',guildId:'g',channelId:'c',scope:'channel',original:snapshot,value:{},installing:false});
+  const values: Record<string, string> = {title:defaults.panel.title,description:defaults.panel.description,color:'',footer:''};
+  const submit = () => interaction({customId:`edit:${id}:appearance`,memberPermissions:new PermissionsBitField(PermissionFlagsBits.ManageGuild),
+    fields:{getTextInputValue:(name:string)=>values[name]},isFromMessage:()=>true,update:async()=>{}}) as ModalSubmitInteraction;
+  for (const color of ['', '#000000', 'なし', ' #5865f2 ']) {
+    values.color = color;
+    await bot.modal(submit());
+    assert.equal(bot.editors.get(id,'alice','g').value.panel?.color, color.trim().startsWith('#') ? parseInt(color.trim().slice(1),16) : null);
+  }
+  assert.equal((await bot.store.settings('g','c')).config.panel.color, defaults.panel.color);
+  const before = structuredClone(bot.editors.get(id,'alice','g').value);
+  values.color = '#xyzxyz';
+  await assert.rejects(bot.modal(submit()), /色は/);
+  assert.deepEqual(bot.editors.get(id,'alice','g').value, before);
+});
+
 test('説明文禁止への切り替え後は古い説明文モーダルもURLコマンドも受け付けない',async()=>{
   const bot=app();const config=structuredClone(snapshot.config);config.content.caption=false;
   bot.store.settings=async()=>({...snapshot,config});

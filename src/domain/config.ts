@@ -12,7 +12,7 @@ const buttonStyle = z.enum(['primary','secondary','success','danger']);
 const buttonEmoji = z.string().max(100).refine(value => !value || /^<a?:\w+:\d{17,20}>$/.test(value) || (/\p{Extended_Pictographic}|\p{Regional_Indicator}|[0-9#*]\uFE0F?\u20E3/u.test(value) && [...new Intl.Segmenter('ja',{granularity:'grapheme'}).segment(value)].length===1), '絵文字を1つ指定してください。');
 export const panelSchema = z.object({
   title: z.string().min(1).max(100), description: z.string().max(1500),
-  color: z.number().int().min(0).max(0xffffff),
+  color: z.number().int().min(0).max(0xffffff).nullable(),
   style: z.enum(['v2', 'embed']).optional(), repost: z.boolean().optional(),
   metadata: z.boolean().optional(), urlButton: z.boolean().optional(), urlAutoLabel: z.boolean().optional(),
   textStyle:buttonStyle.optional(),imageStyle:buttonStyle.optional(),urlStyle:buttonStyle.optional(),helpStyle:buttonStyle.optional(),

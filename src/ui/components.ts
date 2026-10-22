@@ -27,7 +27,7 @@ export function payload(components: (ContainerBuilder | ActionRowBuilder<ButtonB
     allowedMentions: { parse: [] as ('users' | 'roles' | 'everyone')[] } };
 }
 export function panel(config: Config, preview = false): ContainerBuilder {
-  const result = new ContainerBuilder().setAccentColor(config.panel.color);
+  const result = new ContainerBuilder().setAccentColor(config.panel.color ?? undefined);
   const heading = text(`## ${config.panel.title}\n${config.panel.description}`);
   if (config.panel.thumbnail) result.addSectionComponents(new SectionBuilder().addTextDisplayComponents(heading).setThumbnailAccessory(new ThumbnailBuilder().setURL(config.panel.thumbnail)));
   else result.addTextDisplayComponents(heading);
