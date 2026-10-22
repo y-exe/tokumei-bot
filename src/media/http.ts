@@ -95,8 +95,8 @@ export class SafeHttp {
     }
     return result;
   }
-  async json<T = unknown>(url: string): Promise<T> {
-    const result = await this.get(url, 2 * 1024 * 1024);
+  async json<T = unknown>(url: string, headers: Record<string, string> = {}): Promise<T> {
+    const result = await this.get(url, 2 * 1024 * 1024, headers);
     try { return JSON.parse(result.data.toString('utf8')); }
     catch { throw new UserError('取得先から画像情報を読み取れませんでした。画像を直接添付してください。'); }
   }

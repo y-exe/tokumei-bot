@@ -70,6 +70,8 @@ Discordサーバーに匿名投稿機能を追加するBotです。<br>
 
 モデル仕様・設定・検証手順は [安全判定の詳細](docs/media-safety.md) を参照してください。
 
+PixivのR-18作品取得には、ログイン済みアカウントのCookie値を `PIXIV_PHPSESSID` に設定します。取得後もチャンネルのNSFW許可設定に従って投稿を判定します。
+
 ## 管理者向け照会
 
 管理者向けの匿名投稿者照会は、Tailscale内のHTTPSページで利用できます。追加パスワードは不要です。[lookupの設定](docs/lookup.md)を参照してください。

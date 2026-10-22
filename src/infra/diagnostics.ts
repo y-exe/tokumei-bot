@@ -19,7 +19,7 @@ export function diagnosticDetails(error: unknown): string {
   };
   let result = describe(error, 0);
   for (const [name, value] of Object.entries(process.env)) {
-    if (value && value.length >= 8 && /TOKEN|SECRET|PASSWORD|ENCRYPTION_KEY|DATABASE_URL/i.test(name)) result = result.replaceAll(value, '[秘匿]');
+    if (value && value.length >= 8 && /TOKEN|SECRET|PASSWORD|COOKIE|PHPSESSID|ENCRYPTION_KEY|DATABASE_URL/i.test(name)) result = result.replaceAll(value, '[秘匿]');
   }
   return result.replace(/https?:\/\/[^\s"'<>]+|postgres(?:ql)?:\/\/[^\s"'<>]+/gi, '[URLを秘匿]').slice(0, 12_000);
 }

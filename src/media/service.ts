@@ -128,7 +128,10 @@ export class MediaService {
       const id = url.pathname.match(/^\/(?:en\/)?artworks\/(\d+)\/?$/)?.[1] ?? (url.pathname === '/member_illust.php' ? new URLSearchParams(url.search).get('illust_id') : null);
       if (!id || !/^\d+$/.test(id)) throw new UserError('Pixivの作品URLを入力してください。');
       source = `https://www.pixiv.net/artworks/${id}`;
-      const data = pixivResponse.parse(await this.http.json(`https://www.pixiv.net/ajax/illust/${id}/pages?lang=ja`));
+      const session = process.env.PIXIV_PHPSESSID?.trim().replace(/^PHPSESSID=/, '');
+      if (session && /[\s;,"\\\x00-\x1f\x7f]/.test(session)) throw new UserError('Pixivのログイン設定が不正です。管理者に確認してください。');
+      const headers: Record<string, string> = session ? { Cookie: `PHPSESSID=${session}` } : {};
+      const data = pixivResponse.parse(await this.http.json(`https://www.pixiv.net/ajax/illust/${id}/pages?lang=ja`, headers));
       if (data.error) throw new UserError('公開作品の画像を取得できませんでした。画像を直接添付してください。');
       media = (data.body ?? []).map(item => ({ url: item.urls.original, kind: 'image', headers: { Referer: source } }));
     } else if (provider === 'bluesky') {

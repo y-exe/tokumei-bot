@@ -133,6 +133,44 @@ test('一部画像の取得失敗は元の番号で案内し、取得できた�
   assert.ok(result.warnings[0]!.includes('元のファイル1'));assert.ok(result.warnings[1]!.includes('元のファイル3'));
 });
 
+test('PixivのCookieは公式の作品情報取得だけに使用し画像や他サイトには渡さない', async () => {
+  const previous=process.env.PIXIV_PHPSESSID;
+  process.env.PIXIV_PHPSESSID='test-pixiv-session';
+  class AuthHttp extends SafeHttp {
+    calls: {url:string;headers:Record<string,string>}[]=[];
+    override async json<T>(url:string,headers:Record<string,string>={}):Promise<T>{
+      this.calls.push({url,headers});
+      return (url.includes('pixiv.net')?{error:false,body:[{urls:{original:'https://i.pximg.net/original.png'}}]}:{tweet:{media:{all:[{type:'photo',url:'https://pbs.twimg.com/a.jpg'}]}}}) as T;
+    }
+  }
+  try{
+    const http=new AuthHttp();const service=new MediaService(http);
+    const result=await service.resolve('https://www.pixiv.net/artworks/151106533',defaults);
+    assert.equal(http.calls[0]!.url,'https://www.pixiv.net/ajax/illust/151106533/pages?lang=ja');
+    assert.deepEqual(http.calls[0]!.headers,{Cookie:'PHPSESSID=test-pixiv-session'});
+    assert.deepEqual(result.media[0]!.headers,{Referer:'https://www.pixiv.net/artworks/151106533'});
+    await service.resolve('https://x.com/test/status/123',defaults);
+    assert.deepEqual(http.calls[1]!.headers,{});
+    process.env.PIXIV_PHPSESSID='invalid\r\nCookie:value';
+    await assert.rejects(service.resolve('https://www.pixiv.net/artworks/123',defaults),/ログイン設定が不正/);
+    assert.equal(http.calls.length,2);
+    delete process.env.PIXIV_PHPSESSID;
+    await service.resolve('https://www.pixiv.net/artworks/123',defaults);
+    assert.deepEqual(http.calls[2]!.headers,{});
+  }finally{if(previous===undefined)delete process.env.PIXIV_PHPSESSID;else process.env.PIXIV_PHPSESSID=previous;}
+});
+
+test('JSON取得は指定された認証ヘッダーをHTTP取得へ引き継ぐ', async () => {
+  const http=new SafeHttp();
+  const stub=mock.method(http,'get',async (url:string,maxBytes:number,headers:Record<string,string>)=>{
+    assert.equal(url,'https://www.pixiv.net/ajax/illust/123/pages');
+    assert.equal(maxBytes,2*1024*1024);assert.deepEqual(headers,{Cookie:'PHPSESSID=test-session'});
+    return {data:Buffer.from('{"error":false}'),contentType:'application/json',url};
+  });
+  try{assert.deepEqual(await http.json('https://www.pixiv.net/ajax/illust/123/pages',{Cookie:'PHPSESSID=test-session'}),{error:false});}
+  finally{stub.mock.restore();}
+});
+
 test('Pixiv・Bluesky・Mastodonの公開画像をそれぞれの応答から抽出する',async()=>{
   const image=await sharp({create:{width:8,height:8,channels:3,background:'#2266cc'}}).png().toBuffer();
   class ProviderHttp extends SafeHttp {

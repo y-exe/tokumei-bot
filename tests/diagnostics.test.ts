@@ -29,3 +29,9 @@ test('エラー詳細は原因とコードを残しトークンとURLを秘匿�
     else process.env.DIAGNOSTIC_TEST_TOKEN = previous;
   }
 });
+
+test('PixivのセッションCookieをエラー詳細に残さない', () => {
+  const previous=process.env.PIXIV_PHPSESSID;process.env.PIXIV_PHPSESSID='test-private-pixiv-session';
+  try {assert.ok(!diagnosticDetails(new Error('Cookie: PHPSESSID=test-private-pixiv-session')).includes('test-private-pixiv-session'));}
+  finally {if(previous===undefined)delete process.env.PIXIV_PHPSESSID;else process.env.PIXIV_PHPSESSID=previous;}
+});
