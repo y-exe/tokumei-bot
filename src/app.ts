@@ -4,6 +4,7 @@ import {
   type Client, type Interaction, type RepliableInteraction, type TextChannel, type ModalSubmitInteraction,
 } from 'discord.js';
 import { ZodError } from 'zod';
+import { isBotAdmin } from './domain/permissions.js';
 import { defaults, exportTemplate, importTemplate, presetOverrides, resolveConfig, parseRetention, allowsDirectPosts,isRequestMode, type Config, type Preset } from './domain/config.js';
 import { UserError, errorMessage } from './domain/errors.js';
 import { validateText, type PostInput } from './domain/validation.js';
@@ -40,6 +41,7 @@ export class App {
     return interaction.member instanceof GuildMember ? [...interaction.member.roles.cache.keys()] : interaction.member?.roles ?? [];
   }
   async requireManager(interaction: UIInteraction, channelId = interaction.channelId!): Promise<void> {
+    if (isBotAdmin(interaction.user.id)) return;
     const settings = await this.store.settings(interaction.guildId!, channelId, true);
     if (interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) || this.roles(interaction).some(role => settings.config.moderation.managerRoles.includes(role))) return;
     throw new UserError('サーバー管理権限、または設定された管理ロールが必要です。');
@@ -92,7 +94,7 @@ export class App {
     switch (interaction.commandName) {
       case 'error': {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) throw new UserError('エラー詳細の確認にはサーバー管理権限が必要です。');
+        if (!isBotAdmin(interaction.user.id) && !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) throw new UserError('エラー詳細の確認にはサーバー管理権限が必要です。');
         const code = parseDiagnosticCode(interaction.options.getString('code', true));
         if (!code) throw new UserError('表示されたエラーIDを指定してください。');
         const record = await this.store.diagnostic(code, interaction.guildId!);
@@ -285,7 +287,7 @@ export class App {
   async configure(interaction: import('discord.js').ButtonInteraction | import('discord.js').AnySelectMenuInteraction, id: string, action: string): Promise<void> {
     const session = this.editors.get(id, interaction.user.id, interaction.guildId!);
     await this.requireManager(interaction, session.channelId);
-    if (session.scope === 'guild' && !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) throw new UserError('サーバー標準の変更にはサーバー管理権限が必要です。');
+    if (session.scope === 'guild' && !isBotAdmin(interaction.user.id) && !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) throw new UserError('サーバー標準の変更にはサーバー管理権限が必要です。');
     if (action === 'save') {
       await interaction.deferUpdate();
       await this.saveEditor(interaction, id, session); return;
@@ -390,7 +392,7 @@ export class App {
     if (prefix === 'edit' && id && action) {
       const session = this.editors.get(id, interaction.user.id, interaction.guildId!);
       await this.requireManager(interaction, session.channelId);
-      if (session.scope === 'guild' && !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) throw new UserError('サーバー標準の変更にはサーバー管理権限が必要です。');
+      if (session.scope === 'guild' && !isBotAdmin(interaction.user.id) && !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) throw new UserError('サーバー標準の変更にはサーバー管理権限が必要です。');
       const copy = structuredClone(session);
       switch (action) {
         case 'display': {

@@ -32,6 +32,11 @@ test('未設定チャンネル・Bot・Webhook・管理者の投稿は削除し�
     const f=fixture(options);await guardChannel(f.message,f.store);assert.deepEqual(f.events,[]);
   }
 });
+
+test('Bot管理者の通常投稿は管理ロールなしでも削除しない', async () => {
+  const f=fixture();f.message.author.id='483307286513582090';
+  await guardChannel(f.message,f.store);assert.deepEqual(f.events,[]);
+});
 test('DM拒否でも削除は完了し、削除失敗時は削除済み通知を送らない',async()=>{
   const closed=fixture({dmFails:true});await guardChannel(closed.message,closed.store);assert.deepEqual(closed.events,['delete','dm']);
   const forbidden=fixture({deleteFails:true});await guardChannel(forbidden.message,forbidden.store);assert.deepEqual(forbidden.events,['delete']);

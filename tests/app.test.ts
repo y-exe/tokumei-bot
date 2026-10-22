@@ -89,10 +89,25 @@ test('想定内の拒否と入力エラーにはエラーコードや照会案�
     assert.ok(!shown.includes('エラーコード')); assert.ok(!shown.includes('エラーID')); assert.ok(!shown.includes('処理エラー')); assert.ok(!shown.includes('/error')); assert.equal(saved, false);
   }
 });
-test('管理操作は実行時に権限を確認し、サーバー管理権限だけを無条件で許可する', async () => {
+test('管理操作はサーバー管理権限か指定されたBot管理者を許可する', async () => {
   const bot = app();
   await assert.rejects(bot.requireManager(interaction()), /管理権限/);
   await assert.doesNotReject(bot.requireManager(interaction({ memberPermissions: new PermissionsBitField(PermissionFlagsBits.ManageGuild) })));
+  await assert.doesNotReject(bot.requireManager(interaction({ user: { id: '483307286513582090' } })));
+  await assert.rejects(bot.requireManager(interaction({ user: { id: '483307286513582091' } })), /管理権限/);
+});
+
+test('Bot管理者はDiscord管理権限なしでサーバー標準の編集とエラー詳細を利用できる', async () => {
+  const bot = app(); const owner = { id:'483307286513582090' };
+  const id = bot.editors.create({owner:owner.id,guildId:'g',channelId:'c',scope:'guild',original:snapshot,value:structuredClone(defaults),installing:false});
+  bot.respond = async () => {};
+  await bot.configure(interaction({user:owner,customId:`cfg:${id}:back`,update:async()=>{}}) as ButtonInteraction,id,'back');
+  await bot.modal(interaction({user:owner,customId:`edit:${id}:appearance`,fields:{getTextInputValue:(name:string)=>({title:'管理者による変更',description:'',color:'なし',footer:''})[name]},isFromMessage:()=>true,update:async()=>{}}) as ModalSubmitInteraction);
+  assert.equal(bot.editors.get(id,owner.id,'g').value.panel?.color,null);
+  let checked = false;
+  bot.store.diagnostic = async () => {checked=true;return null;};
+  await assert.rejects(bot.command(interaction({user:owner,commandName:'error',deferReply:async()=>{},options:{getString:()=> '1234abcd'}}) as never),/見つかりません/);
+  assert.equal(checked,true);
 });
 test('他人の下書き・別サーバーの下書きを操作できず、管理権限が失われた操作も拒否する', async () => {
   const bot = app();

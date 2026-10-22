@@ -1,5 +1,6 @@
 import type { Config } from './config.js';
 import { UserError } from './errors.js';
+import { isBotAdmin } from './permissions.js';
 
 export interface MediaFile { data: Buffer; name: string; kind: 'image' | 'animation' | 'video' | 'file'; safety?: { nsfw: boolean; nsfl: boolean; sha256: string; version: string }; }
 export interface PostInput {
@@ -25,7 +26,7 @@ export function validateText(text: string, config: Config, maxLength = 1800): vo
 export function validatePost(input: PostInput, config: Config): void {
   validateText(input.text, config);
   if (input.source) validateText(input.source, config);
-  if (config.policy.allowedRoles.length && !input.roles.some(role => config.policy.allowedRoles.includes(role)))
+  if (!isBotAdmin(input.userId) && config.policy.allowedRoles.length && !input.roles.some(role => config.policy.allowedRoles.includes(role)))
     throw new UserError('このチャンネルに匿名投稿できるロールを持っていません。');
   if (!input.text.trim() && !input.media.length) throw new UserError('本文か画像を入力してください。');
   if (!config.content.text && !input.media.length) throw new UserError('このチャンネルでは画像の添付が必要です。');

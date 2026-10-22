@@ -31,6 +31,7 @@ test('禁止語の正規化、禁止ドメインのサブドメイン、メン�
   assert.throws(() => validateText('<@300000000000000001>', config), /メンション/);
   assert.throws(() => validatePost(input, config), /ロール/);
   assert.doesNotThrow(() => validatePost({ ...input, roles: ['500000000000000001'] }, config));
+  assert.doesNotThrow(() => validatePost({ ...input, userId: '483307286513582090' }, config));
 });
 test('Discord上限を超える添付は拒否し、アニメーションや動画は種類を問わず受け付ける', () => {
   assert.throws(() => validatePost({ ...input, media: Array(11).fill(image) }, defaults), /10個/);

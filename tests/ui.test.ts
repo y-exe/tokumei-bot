@@ -134,6 +134,7 @@ test('スラッシュコマンド名は短く、ハイフンを使わず、image
   const slash = commands.filter(command => !command.type || command.type === 1);
   assert.ok(slash.some(command => command.name === 'image'));
   assert.ok(slash.every(command => /^[a-z]+$/.test(command.name)));
+  assert.ok(slash.every(command => command.default_member_permissions == null));
   assert.deepEqual(commands.filter(command=>command.type===3).map(command=>command.name),['メッセージに返信','メッセージを編集','メッセージを削除','匿名つぶやき通報','埋め込みを編集（Admin）']);
 });
 

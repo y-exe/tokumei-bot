@@ -26,6 +26,17 @@ test('旧通報の絵文字・色・ボタンをV2で再現し、匿名投稿者
   assert.ok(JSON.stringify(reportView(detail,true).toJSON()).includes('使用権剥奪'));
   const ended=JSON.stringify(reportView(detail,true,'処罰なし').toJSON());assert.ok(ended.includes('終了済み'));assert.ok(!ended.includes('punish:'));
 });
+
+test('Bot管理者は本人のDiscord管理権限とロール順位によらず通報に対応できる', async () => {
+  const f=fixture();const owner='483307286513582090';
+  f.actor.id=owner;f.actor.permissions=new PermissionsBitField(0n);f.actor.roles.highest.comparePositionTo=()=>-1;
+  const fetch=f.guild.members.fetch.bind(f.guild.members);
+  f.guild.members.fetch=(async (id:string)=>id===owner?f.actor:fetch(id)) as typeof f.guild.members.fetch;
+  await f.service.execute(f.guild,'c',detail.message_id,owner,'ban','確認');
+  assert.ok(f.calls.some(call=>Array.isArray(call)&&call[0]==='ban'));
+  const denied=fixture();denied.actor.permissions=new PermissionsBitField(0n);
+  await assert.rejects(denied.service.execute(denied.guild,'c',detail.message_id,'actor','none',''),/管理権限/);
+});
 test('BANは過去メッセージの一括削除をせず、完了後に対象投稿だけを削除する',async()=>{
   const f=fixture();await f.service.execute(f.guild,'c',detail.message_id,'actor','ban','理由');
   assert.deepEqual(f.calls[1],['ban',{reason:'理由',deleteMessageSeconds:0}]);assert.equal(f.calls.at(-1),'remove');

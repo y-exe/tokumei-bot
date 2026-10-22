@@ -1,6 +1,7 @@
 import {PermissionFlagsBits,type Guild} from 'discord.js';
 import {UserError} from '../domain/errors.js';
 import {isRequestMode} from '../domain/config.js';
+import {isBotAdmin} from '../domain/permissions.js';
 import type {Store,ReportDetail} from '../infra/store.js';
 import type {Posting} from './posting.js';
 export type Punishment='ban'|'timeout'|'revoke'|'none';
@@ -12,7 +13,7 @@ export class Moderation{
     const config=(await this.store.settings(guild.id,channelId,true)).config;
     if(config.policy.retentionDays===0||config.policy.reportRetentionDays===0)throw new UserError('保存しない設定のチャンネルでは通報処罰を利用できません。');
     const actor=await guild.members.fetch(actorId);
-    if(!actor.permissions.has(PermissionFlagsBits.ManageGuild)&&!actor.roles.cache.some(role=>config.moderation.managerRoles.includes(role.id)))throw new UserError('通報対応の管理権限が必要です。');
+    if(!isBotAdmin(actorId)&&!actor.permissions.has(PermissionFlagsBits.ManageGuild)&&!actor.roles.cache.some(role=>config.moderation.managerRoles.includes(role.id)))throw new UserError('通報対応の管理権限が必要です。');
     if(action==='revoke'&&!isRequestMode(config))throw new UserError('使用権剥奪は匿名要望の通報だけに実行できます。');
     const report=await this.store.reportDetail(guild.id,channelId,messageId);
     if(!report)throw new UserError('この通報は対応済みか、処理中・保存期限切れです。');
@@ -20,11 +21,11 @@ export class Moderation{
     let target;
     if(action==='ban'||action==='timeout'){
       const permission=action==='ban'?PermissionFlagsBits.BanMembers:PermissionFlagsBits.ModerateMembers;
-      if(!actor.permissions.has(permission))throw new UserError('この処罰に必要なDiscordの権限がありません。');
+      if(!isBotAdmin(actorId)&&!actor.permissions.has(permission))throw new UserError('この処罰に必要なDiscordの権限がありません。');
       const me=await guild.members.fetchMe();if(!me.permissions.has(permission))throw new UserError('Botにこの処罰に必要なDiscordの権限がありません。');
       target=await guild.members.fetch(report.userId).catch(()=>null);
       if(!target)throw new UserError('処罰対象がサーバー内に見つかりません。');
-      if(target.id===actor.id||target.id===guild.ownerId||(actor.id!==guild.ownerId&&actor.roles.highest.comparePositionTo(target.roles.highest)<=0)||!(action==='ban'?target.bannable:target.moderatable))throw new UserError('ロールの順位などにより、この投稿者への処罰は実行できません。');
+      if(target.id===actor.id||target.id===guild.ownerId||(!isBotAdmin(actorId)&&actor.id!==guild.ownerId&&actor.roles.highest.comparePositionTo(target.roles.highest)<=0)||!(action==='ban'?target.bannable:target.moderatable))throw new UserError('ロールの順位などにより、この投稿者への処罰は実行できません。');
     }
     const token=await this.store.claimReportAction(guild.id,channelId,messageId);
     let external=false,warning='';

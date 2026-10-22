@@ -1,6 +1,7 @@
 import { EmbedBuilder, PermissionFlagsBits, type Message } from 'discord.js';
 import type { Store } from '../infra/store.js';
 import { allowsDirectPosts } from '../domain/config.js';
+import { isBotAdmin } from '../domain/permissions.js';
 import { colors, uiEmoji } from '../ui/components.js';
 import type { Panels } from './panels.js';
 
@@ -9,7 +10,7 @@ export async function guardChannel(message: Message, store: Store, panels?: Pick
   const settings = await store.settings(message.guildId, message.channelId);
   if (!settings.enabled) return;
   try {
-    if (allowsDirectPosts(settings.config)) return;
+    if (isBotAdmin(message.author.id) || allowsDirectPosts(settings.config)) return;
     const member = message.member ?? await message.guild!.members.fetch(message.author.id);
     if (member.permissions.has(PermissionFlagsBits.ManageGuild) || member.roles.cache.some(role => settings.config.moderation.managerRoles.includes(role.id))) {
       console.info(`管理権限のある人の通常投稿のため削除しませんでした(チャンネル:${message.channelId})`);
