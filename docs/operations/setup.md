@@ -37,8 +37,8 @@ bun run commands
 bun run start
 ```
 
-`commands` は `DISCORD_GUILD_ID` のサーバーへ登録します。
-全サーバー向けに登録する場合は `bun run commands --global` を使います。
+`commands` は全サーバー向けに登録し、サーバー個別の重複を取り除きます（`--global` も同じ動作です）。
+開発用にサーバー個別へ登録する場合だけ、`DISCORD_GUILD_ID` を設定して `bun run commands --guild` を使います。全体向けと同じコマンドは重複登録できません。
 初回起動時にDBのテーブル作成とモデルの取得を行います。
 案内用の絵文字もBotのアプリケーションへ自動追加します。次回以降は再利用し、不足分だけ補充します。サーバーの絵文字枠や手動登録は不要です。追加に失敗した場合は標準絵文字で表示を続けます。
 
@@ -52,7 +52,7 @@ bun run start
 | --- | --- |
 | `DISCORD_BOT_TOKEN` | 必須。Botトークン |
 | `DISCORD_APPLICATION_ID` | コマンド登録時に必須。アプリケーションID |
-| `DISCORD_GUILD_ID` | サーバー単位でコマンドを登録する場合のID |
+| `DISCORD_GUILD_ID` | 開発用の `commands --guild` で使うサーバーID |
 | `DATABASE_URL` | DB接続先。代わりに`PGHOST`等のpg接続変数も利用可能 |
 | `ENCRYPTION_KEY` | 必須。32バイトをbase64化したWebhook暗号化鍵 |
 | `MEDIA_CONCURRENCY` | 取得・画像処理の同時数。1〜8、既定2 |
