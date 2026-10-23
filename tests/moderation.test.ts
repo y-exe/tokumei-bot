@@ -21,7 +21,7 @@ function fixture(){
 test('旧通報の絵文字・色・ボタンをV2で再現し、匿名投稿者は表示しない',()=>{
   const normal=reportView(detail,false).toJSON();const json=JSON.stringify(normal);
   assert.equal(normal.accent_color,colors.report);assert.ok(json.includes(uiEmoji.flag));
-  for(const value of ['匿名メッセージの通報','1407591216459153460','サーバーBAN','1ヶ月TO(28日間)','処罰なし','利用規約'])assert.ok(json.includes(value));
+  for(const value of ['匿名メッセージの通報',uiEmoji.time,'サーバーBAN','1ヶ月TO(28日間)','処罰なし','利用規約'])assert.ok(json.includes(value));
   assert.ok(!json.includes('secret-author'));assert.ok(!json.includes('使用権剥奪'));assert.ok(json.includes('ˋˋˋ'));
   assert.ok(JSON.stringify(reportView(detail,true).toJSON()).includes('使用権剥奪'));
   const ended=JSON.stringify(reportView(detail,true,'処罰なし').toJSON());assert.ok(ended.includes('終了済み'));assert.ok(!ended.includes('punish:'));

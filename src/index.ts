@@ -11,6 +11,7 @@ import { initializeNudity } from './media/nudity.js';
 import { initializeAnimeNudity } from './media/anime-nudity.js';
 import { healthServer, heartbeat } from './infra/health.js';
 import { uiEmoji } from './ui/components.js';
+import { syncApplicationEmojis } from './ui/emoji-sync.js';
 import { guardChannel } from './services/channel-guard.js';
 import { lookupServer } from './infra/lookup.js';
 
@@ -40,12 +41,14 @@ client.on(Events.InteractionCreate, interaction => {
 });
 client.once(Events.ClientReady, async ready => {
   try {
-    const emojis = await ready.application.emojis.fetch();
-    for (const [key, name] of Object.entries({ check:'legacy_9',flag:'legacy_3',warning:'legacy_11',info:'legacy_10',error:'12',time:'legacy_6',content:'legacy_5',count:'legacy_8',reporter:'legacy_7' })) {
-      const emoji = emojis.find(item=>item.name===name);
-      if (emoji) uiEmoji[key as keyof typeof uiEmoji] = emoji.toString();
-    }
-  } catch { console.error('案内用絵文字の読み込みに失敗しました。'); }
+    const result = await syncApplicationEmojis({
+      list: async () => [...(await ready.application.emojis.fetch()).values()],
+      create: (name, image) => ready.application.emojis.create({ name, attachment: image }),
+    });
+    Object.assign(uiEmoji, result.mappings);
+    console.info(`案内用絵文字: 追加 ${result.created} / 再利用 ${result.reused}`);
+    if (result.failed.length) console.error(`絵文字を追加できなかったため標準表示を使用します: ${result.failed.join('・')}`);
+  } catch { console.error('案内用絵文字の同期に失敗したため標準表示を使用します。'); }
   await app.auditPanels().catch(() => console.error('起動時の案内確認に失敗しました。'));
   console.info(`匿名Bot v2 起動完了: ${ready.user.username}`);
 });

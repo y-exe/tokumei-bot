@@ -5,6 +5,7 @@ WORKDIR /app
 COPY --chown=bun:bun package.json bun.lock ./
 RUN bun install --frozen-lockfile --production
 COPY --chown=bun:bun src ./src
+COPY --chown=bun:bun assets/emojis ./assets/emojis
 COPY --chown=bun:bun THIRD_PARTY_NOTICES.md ./
 RUN bun -e "import { prepareSafetyModels } from './src/media/safety.ts'; import { prepareNudityModel } from './src/media/nudity.ts'; import { prepareAnimeNudityModel } from './src/media/anime-nudity.ts'; await prepareSafetyModels(); await prepareNudityModel(); await prepareAnimeNudityModel();"
 USER bun

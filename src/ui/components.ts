@@ -4,6 +4,8 @@ import {
   type APIComponentInMessageActionRow, type APIMessageTopLevelComponent,
 } from 'discord.js';
 import { automaticUrlLabel, urlMethodLabel, retentionLabel, type Config } from '../domain/config.js';
+import { uiEmoji } from './emojis.js';
+export { uiEmoji } from './emojis.js';
 
 export function button(id: string, label: string, style = ButtonStyle.Secondary): ButtonBuilder {
   return new ButtonBuilder().setCustomId(id).setLabel(label).setStyle(style);
@@ -11,12 +13,6 @@ export function button(id: string, label: string, style = ButtonStyle.Secondary)
 export function row(...buttons: ButtonBuilder[]): ActionRowBuilder<ButtonBuilder> { return new ActionRowBuilder<ButtonBuilder>().addComponents(...buttons); }
 export function text(value: string): TextDisplayBuilder { return new TextDisplayBuilder().setContent(value); }
 export const colors = { info: 0x3498db, settings: 0x3498db, success: 0x2ecc71, warning: 0xf39c12, danger: 0xe53935, report: 0xe74c3c, preview: 0x3498db } as const;
-export const uiEmoji = {
-  check: '<:9_:1407591872234520576>', flag: '<:3_:1407591152491827211>',
-  warning: '<:11:1407591910767464459>', info: '<:10:1407591891318472794>',
-  error: '<:12:1407591937728577599>',
-  time:'<:6_:1407591216459153460>',content:'<:5_:1407591193751195698>',count:'<:8_:1407591279243825162>',reporter:'<:7_:1407591242656911391>',
-};
 export const legalLinks = '[利用規約](https://github.com/y-exe/tokumei-bot/blob/main/TERMS_OF_SERVICE.md)・[プライバシーポリシー](https://github.com/y-exe/tokumei-bot/blob/main/PRIVACY_POLICY.md)';
 export function card(title: string, description: string, color: number = colors.info): ContainerBuilder {
   const emoji = color === colors.success ? uiEmoji.check : color === colors.warning ? uiEmoji.warning : color === colors.danger ? uiEmoji.error : uiEmoji.info;
