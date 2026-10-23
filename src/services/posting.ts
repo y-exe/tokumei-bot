@@ -153,7 +153,7 @@ export class Posting {
   }
   validateEdit(post: StoredPost, content: string, config: Config): void {
     validateText(content, config, post.layout === 'legacy' ? 2000 : 1800);
-    if (post.source) validateText(post.source, config);
+    if (post.source) validateText(post.source, config, 1800, 'source');
     if (!content.trim() && !post.media.length) throw new UserError('本文を空にすることはできません。投稿を削除してください。');
     if (!config.content.text && !post.media.length) throw new UserError('このチャンネルは画像必須です。');
     if (post.media.length && !config.content.caption && content.trim()) throw new UserError('このチャンネルでは説明文を付けられません。');

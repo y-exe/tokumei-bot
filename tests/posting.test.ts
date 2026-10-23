@@ -10,6 +10,7 @@ import { SecretBox } from '../src/infra/secrets.js';
 import { Posting } from '../src/services/posting.js';
 import { defaults } from '../src/domain/config.js';
 import type { PostInput } from '../src/domain/validation.js';
+import { BlockedWordError } from '../src/domain/errors.js';
 
 let db: PGlite; let server: PGLiteSocketServer; let store: Store; let posting: Posting; let secrets: SecretBox;
 const guild = '100000000000000010'; const channel = '200000000000000010'; const user = '300000000000000010';
@@ -240,4 +241,17 @@ test('同じ親のスレッドとフォーラム投稿ではWebhookを共有し�
   assert.equal(await posting.createWebhook(first),credentials[0]);assert.equal(creates,1);
   first.client.fetchWebhook=async()=>({channelId:'other'}) as never;
   await assert.rejects(posting.createWebhook(first),/送信先が一致しません/);
+});
+
+test('公開済みの投稿編集でも禁止語を確認し、拒否した編集はWebhookへ送らない',async()=>{
+  const target='200000000000000050';
+  await store.saveSettings(await store.settings(guild,target,true),'channel',{policy:{cooldown:0,blockedWords:['改造']}},user);
+  await store.setPanel(guild,target,'panel',(await store.settings(guild,channel,true)).webhook!);
+  const link=await posting.publish({...post('edit-blocked-word'),channelId:target});
+  const messageId=link.split('/').at(-1)!;const before=edited.length;
+  await assert.rejects(posting.edit(guild,target,messageId,user,'Switch2改造'),error=>error instanceof BlockedWordError&&error.words.includes('改造'));
+  assert.equal(edited.length,before);
+  assert.equal((await store.post(guild,target,messageId))!.content,'匿名テスト');
+  await posting.edit(guild,target,messageId,user,'Switch2＊＊');
+  assert.equal(edited.length,before+1);assert.equal((await store.post(guild,target,messageId))!.content,'Switch2＊＊');
 });

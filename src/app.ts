@@ -7,7 +7,8 @@ import { ZodError } from 'zod';
 import { isBotAdmin } from './domain/permissions.js';
 import { isPostingChannel, type PostingChannel } from './domain/channels.js';
 import { defaults, exportTemplate, importTemplate, presetOverrides, resolveConfig, parseRetention, allowsDirectPosts,isRequestMode, type Config, type Preset } from './domain/config.js';
-import { UserError, MediaSafetyError, errorMessage } from './domain/errors.js';
+import { UserError, MediaSafetyError, BlockedWordError, errorMessage } from './domain/errors.js';
+import { maskBlockedWords } from './domain/blocked-words.js';
 import { validateText, type PostInput } from './domain/validation.js';
 import type { Store, ReportNotice } from './infra/store.js';
 import type { SecretBox } from './infra/secrets.js';
@@ -23,6 +24,7 @@ import {reportView} from './ui/report.js';
 import {Moderation,punishmentLabels,type Punishment} from './services/moderation.js';
 import { diagnosticCode, diagnosticDetails, parseDiagnosticCode } from './infra/diagnostics.js';
 import { bugReportUrl, reportOperation } from './ui/bug-report.js';
+import { blockedTextView, type TextAction, type TextRecoverySession } from './ui/text-recovery.js';
 
 const emptyMentions = { parse: [] as ('users' | 'roles' | 'everyone')[] };
 type UIInteraction = RepliableInteraction;
@@ -34,6 +36,7 @@ export class App {
   readonly moderation:Moderation;
   readonly editors = new Sessions<EditorSession>();
   readonly previews = new Sessions<PreviewSession>(10 * 60_000, Number.POSITIVE_INFINITY);
+  readonly textRecoveries = new Sessions<TextRecoverySession>();
   constructor(readonly client: Client, readonly store: Store, readonly secrets: SecretBox, readonly media: MediaService) {
     this.posting = new Posting(store, secrets, async (guildId, channelId) => {
       const channel = await this.channel(guildId, channelId);
@@ -182,28 +185,94 @@ export class App {
     }
   }
   async send(interaction: UIInteraction, content: string, media: PostInput['media'], source?: string, replyTo?: string, videoLinks?: string[]): Promise<void> {
-    const link = await this.posting.publish({ operationId: interaction.id, guildId: interaction.guildId!, channelId: interaction.channelId!,
-      userId: interaction.user.id, roles: this.roles(interaction), text: content, media, source, replyTo, videoLinks });
-    let notice = '';
-    try { await this.panels.bump(interaction.guildId!, interaction.channelId!); }
-    catch { notice = '\n案内の再送に失敗しました。投稿は送信済みです。管理者に案内の権限を確認してもらってください。'; }
-    if (notice) await this.respond(interaction, [card('案内を確認してください', `[投稿を開く](${link})${notice}`, colors.warning)]);
-    else await interaction.deleteReply().catch(() => console.error('投稿済みの操作画面を閉じられませんでした。'));
+    await this.withBlockedText(interaction, content, { kind: 'post', media, source, replyTo, videoLinks }, async () => {
+      const link = await this.posting.publish({ operationId: interaction.id, guildId: interaction.guildId!, channelId: interaction.channelId!,
+        userId: interaction.user.id, roles: this.roles(interaction), text: content, media, source, replyTo, videoLinks });
+      let notice = '';
+      try { await this.panels.bump(interaction.guildId!, interaction.channelId!); }
+      catch { notice = '\n案内の再送に失敗しました。投稿は送信済みです。管理者に案内の権限を確認してもらってください。'; }
+      if (notice) await this.respond(interaction, [card('案内を確認してください', `[投稿を開く](${link})${notice}`, colors.warning)]);
+      else await interaction.deleteReply().catch(() => console.error('投稿済みの操作画面を閉じられませんでした。'));
+    });
   }
   async prepareUrl(interaction: UIInteraction, url: string, content: string): Promise<void> {
-    const settings = await this.store.settings(interaction.guildId!, interaction.channelId!, true);
-    if (!settings.enabled) throw new UserError('このチャンネルには匿名投稿が設置されていません。');
-    validateText(url, settings.config); validateText(content, settings.config);
-    if (!settings.config.content.caption && content.trim()) throw new UserError('このチャンネルでは画像に説明文を付けられません。');
-    const result = await this.media.fromUrl(url, settings.config);
-    const session: PreviewSession = { owner: interaction.user.id, guildId: interaction.guildId!, channelId: interaction.channelId!,
-      files: result.files, source: result.source, text: content, warnings: result.warnings, selected: result.files.map((_, index) => index), sending: false, videoLinks: result.videoLinks };
-    const id = this.previews.create(session, result.files.reduce((sum, file) => sum + file.data.length, 0));
-    await interaction.editReply({ ...payload(previewView(id, session, settings.config.content.caption)), flags: MessageFlags.IsComponentsV2,
-      files: session.files.map(file => new AttachmentBuilder(file.data, { name: file.name })) });
+    await this.withBlockedText(interaction, content, { kind: 'url', url }, async () => {
+      const settings = await this.store.settings(interaction.guildId!, interaction.channelId!, true);
+      if (!settings.enabled) throw new UserError('このチャンネルには匿名投稿が設置されていません。');
+      validateText(url, settings.config, 1800, 'source'); validateText(content, settings.config);
+      if (!settings.config.content.caption && content.trim()) throw new UserError('このチャンネルでは画像に説明文を付けられません。');
+      const result = await this.media.fromUrl(url, settings.config);
+      const session: PreviewSession = { owner: interaction.user.id, guildId: interaction.guildId!, channelId: interaction.channelId!,
+        files: result.files, source: result.source, text: content, warnings: result.warnings, selected: result.files.map((_, index) => index), sending: false, videoLinks: result.videoLinks };
+      const id = this.previews.create(session, result.files.reduce((sum, file) => sum + file.data.length, 0));
+      await interaction.editReply({ ...payload(previewView(id, session, settings.config.content.caption)), flags: MessageFlags.IsComponentsV2,
+        files: session.files.map(file => new AttachmentBuilder(file.data, { name: file.name })) });
+    });
+  }
+  async withBlockedText(interaction: UIInteraction, content: string, action: TextAction, operation: () => Promise<void>): Promise<void> {
+    try { await operation(); }
+    catch (error) {
+      if (!(error instanceof BlockedWordError) || error.scope !== 'body') throw error;
+      const bytes = Buffer.byteLength(content) + (action.kind === 'post' ? action.media.reduce((sum,file)=>sum+file.data.length,0) : 0);
+      let id: string;
+      try {
+        id = this.textRecoveries.create({ owner: interaction.user.id, guildId: interaction.guildId!, channelId: interaction.channelId!,
+          text: content, action, maxLength: error.maxLength, busy: false }, bytes);
+      } catch { throw new UserError(`${error.message}\n\nやり直し用の本文を一時保存できませんでした。本文をコピーして投稿し直してください。`); }
+      await this.respond(interaction, [blockedTextView(id, error, action, bugReportUrl(reportOperation(interaction), undefined, new Date()))]);
+    }
+  }
+  async editPost(interaction: UIInteraction, messageId: string, content: string): Promise<void> {
+    await this.withBlockedText(interaction, content, { kind: 'edit', messageId }, async () => {
+      await this.posting.edit(interaction.guildId!, interaction.channelId!, messageId, interaction.user.id, content);
+      await this.respond(interaction, [card('編集しました', '投稿の本文を更新しました。', colors.success)]);
+    });
+  }
+  async updateCaption(interaction: UIInteraction, previewId: string, content: string, restoring = false): Promise<void> {
+    const session = this.previews.get(previewId, interaction.user.id, interaction.guildId!);
+    if (session.channelId !== interaction.channelId) throw new UserError('元のチャンネルで操作してください。');
+    if (session.sending) throw new UserError('送信中は説明文を変更できません。');
+    const settings = await this.store.settings(session.guildId, session.channelId, true);
+    if (!settings.config.content.caption) throw new UserError('このチャンネルでは説明文を付けられません。');
+    await this.withBlockedText(interaction, content, { kind: 'caption', previewId }, async () => {
+      validateText(content, settings.config); session.text = content;
+      if (restoring) await interaction.editReply({ ...payload(previewView(previewId, session, true)), flags: MessageFlags.IsComponentsV2,
+        attachments: [], files: session.files.map(file => new AttachmentBuilder(file.data, { name: file.name })) });
+      else if (interaction.isModalSubmit() && interaction.isFromMessage()) await interaction.update({ components: previewView(previewId, session, true), allowedMentions: emptyMentions });
+      else await this.respond(interaction, previewView(previewId, session, true));
+    });
+  }
+  recovery(interaction: UIInteraction, id: string): TextRecoverySession {
+    const session = this.textRecoveries.get(id, interaction.user.id, interaction.guildId!);
+    if (session.channelId !== interaction.channelId) throw new UserError('元のチャンネルで操作してください。');
+    if (session.busy) throw new UserError('この操作は処理中です。');
+    return session;
+  }
+  async retryText(interaction: UIInteraction, id: string, session: TextRecoverySession, content: string): Promise<void> {
+    this.textRecoveries.delete(id);
+    const action = session.action;
+    if (action.kind === 'post') await this.send(interaction, content, action.media, action.source, action.replyTo, action.videoLinks);
+    else if (action.kind === 'url') await this.prepareUrl(interaction, action.url, content);
+    else if (action.kind === 'edit') await this.editPost(interaction, action.messageId, content);
+    else await this.updateCaption(interaction, action.previewId, content, true);
   }
   async component(interaction: import('discord.js').ButtonInteraction | import('discord.js').AnySelectMenuInteraction): Promise<void> {
     const [prefix, id, action] = interaction.customId.split(':');
+    if (prefix === 'blocked' && id && interaction.isButton()) {
+      const session = this.recovery(interaction, id);
+      if (action === 'edit') {
+        await interaction.showModal(new ModalBuilder().setCustomId(`blocked:${id}:submit`).setTitle('文字を編集')
+          .addLabelComponents(input('text', '本文', session.text, session.maxLength, true, false)));
+      } else if (action === 'mask') {
+        session.busy = true;
+        try {
+          await interaction.deferUpdate();
+          const settings = await this.store.settings(session.guildId, session.channelId, true);
+          await this.retryText(interaction, id, session, maskBlockedWords(session.text, settings.config.policy.blockedWords));
+        } finally { session.busy = false; }
+      }
+      return;
+    }
     if (prefix === 'post') {
       const settings = await this.store.settings(interaction.guildId!, interaction.channelId!, true);
       if (id === 'help') { await this.respond(interaction, [help(settings.config)]); return; }
@@ -378,6 +447,13 @@ export class App {
     const field = (name: string) => interaction.fields.getTextInputValue(name);
     const selected = (name:string) => interaction.fields.fields.get(name)?.type===ComponentType.StringSelect
       ? interaction.fields.getStringSelectValues(name)[0]??'' : field(name);
+    if (prefix === 'blocked' && id && action === 'submit') {
+      const session = this.recovery(interaction, id);
+      session.busy = true;
+      try { await interaction.deferUpdate(); await this.retryText(interaction, id, session, field('text')); }
+      finally { session.busy = false; }
+      return;
+    }
     if (prefix === 'submit' || prefix === 'reply' || prefix === 'replyimage') {
       const settings = await this.store.settings(interaction.guildId!, interaction.channelId!, true);
       const kind = prefix === 'reply' ? 'text' : prefix === 'replyimage' ? 'image' : id;
@@ -387,7 +463,7 @@ export class App {
       const files = kind === 'image' ? await this.media.attachments([...interaction.fields.getUploadedFiles('files', true).values()].map(file => file.url), settings.config) : [];
       await this.send(interaction, content, files, undefined, prefix === 'reply' || prefix === 'replyimage' ? id : undefined); return;
     }
-    if (prefix === 'selfedit' && id) { await interaction.deferReply({ flags: MessageFlags.Ephemeral }); await this.posting.edit(interaction.guildId!, interaction.channelId!, id, interaction.user.id, field('text')); await this.respond(interaction, [card('編集しました', '投稿の本文を更新しました。', colors.success)]); return; }
+    if (prefix === 'selfedit' && id) { await interaction.deferReply({ flags: MessageFlags.Ephemeral }); await this.editPost(interaction, id, field('text')); return; }
     if (prefix === 'report' && id) { await interaction.deferReply({ flags: MessageFlags.Ephemeral }); await this.report(interaction, id, field('reason')); return; }
     if(prefix==='punishconfirm'&&id&&action){
       const channelId=interaction.customId.split(':')[3]!;await this.requireManager(interaction,channelId);
@@ -407,12 +483,7 @@ export class App {
       await this.respond(interaction,[card('対応を記録しました',`${punishmentLabels[action as Punishment]}で処理を終了しました。${warning?'\n'+warning:''}`,warning?colors.warning:colors.success)]);return;
     }
     if (prefix === 'caption' && id) {
-      const session = this.previews.get(id, interaction.user.id, interaction.guildId!);
-      if (session.sending) throw new UserError('送信中は説明文を変更できません。');
-      const settings = await this.store.settings(session.guildId, session.channelId,true);
-      if (!settings.config.content.caption) throw new UserError('このチャンネルでは説明文を付けられません。');
-      validateText(field('text'), settings.config); session.text = field('text');
-      if (interaction.isFromMessage()) await interaction.update({ components: previewView(id, session, settings.config.content.caption), allowedMentions: emptyMentions });
+      await this.updateCaption(interaction, id, field('text'));
       return;
     }
     if (prefix === 'edit' && id && action) {

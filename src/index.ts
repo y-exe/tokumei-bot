@@ -60,7 +60,7 @@ client.once(Events.ClientReady, async ready => {
 });
 await store.cleanup();
 const cleanup = setInterval(() => {
-  app.editors.sweep(); app.previews.sweep(); app.posting.sweep();
+  app.editors.sweep(); app.previews.sweep(); app.textRecoveries.sweep(); app.posting.sweep();
   void store.cleanup().catch(() => console.error('保存期限の削除処理に失敗しました。'));
   void app.retryReportNotices().catch(() => console.error('未通知の通報を確認できませんでした。'));
   void Promise.all([...new Set([process.env.WATCHER_PUSH_URL,process.env.WATCHER_IMAGE_PUSH_URL])]

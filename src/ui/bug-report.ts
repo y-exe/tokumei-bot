@@ -9,6 +9,7 @@ const operations: Record<string, string> = {
   own: '自分の投稿の操作', selfedit: '自分の投稿の編集', mine: '自分の投稿の一覧',
   recover: '送信結果の確認', report: '通報', reports: '通報の確認', mod: '通報の操作',
   moderate: '通報への対応', punish: '通報への対応', dismiss: '画面を閉じる',
+  blocked: '禁止用語の修正',
 };
 
 export function reportOperation(interaction: RepliableInteraction): string {
