@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { REST, Routes } from 'discord.js';
 import { commands } from './commands.js';
-import { registerGlobalCommands, registerGuildCommands, type RegisteredCommand } from './infra/command-registration.js';
+import { registerGlobalCommands, registerGuildCommands, commandRegistrationApi } from './infra/command-registration.js';
 
 const token = process.env.DISCORD_BOT_TOKEN ?? process.env.token;
 const application = process.env.DISCORD_APPLICATION_ID;
@@ -13,23 +13,7 @@ if (guild && !/^\d{17,20}$/.test(guild)) throw new Error('DISCORD_GUILD_IDには
 const rest = new REST({ version: '10' }).setToken(token);
 const current = await rest.get(Routes.oauth2CurrentApplication()) as { id: string };
 if (current.id !== application) throw new Error('トークンとDISCORD_APPLICATION_IDの対象が一致しません。');
-const api = {
-  global: () => rest.get(Routes.applicationCommands(application)) as Promise<RegisteredCommand[]>,
-  registerGlobal: () => rest.put(Routes.applicationCommands(application), { body: commands }) as Promise<RegisteredCommand[]>,
-  guildIds: async function* () {
-    let after: string | undefined;
-    for (;;) {
-      const query = new URLSearchParams({ limit: '200', ...(after ? { after } : {}) });
-      const guilds = await rest.get(Routes.userGuilds(), { query }) as { id: string }[];
-      for (const item of guilds) yield item.id;
-      if (guilds.length < 200) return;
-      after = guilds.at(-1)!.id;
-    }
-  },
-  guild: (guildId: string) => rest.get(Routes.applicationGuildCommands(application, guildId)) as Promise<RegisteredCommand[]>,
-  registerGuild: (guildId: string, body: RegisteredCommand[]) => rest.put(Routes.applicationGuildCommands(application, guildId), { body }),
-  removeGuild: (guildId: string, commandId: string) => rest.delete(Routes.applicationGuildCommand(application, guildId, commandId)),
-};
+const api = commandRegistrationApi(rest, application);
 if (guild) {
   await registerGuildCommands(api, guild);
   console.info(`${commands.length}個のコマンドを指定サーバー内に登録しました。`);

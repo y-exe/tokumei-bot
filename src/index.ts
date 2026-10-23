@@ -14,6 +14,8 @@ import { uiEmoji } from './ui/components.js';
 import { syncApplicationEmojis } from './ui/emoji-sync.js';
 import { guardChannel } from './services/channel-guard.js';
 import { lookupServer } from './infra/lookup.js';
+import { commandRegistrationApi, registerGlobalCommands } from './infra/command-registration.js';
+import { diagnosticDetails } from './infra/diagnostics.js';
 
 const token = process.env.DISCORD_BOT_TOKEN ?? process.env.token;
 const database = process.env.DATABASE_URL;
@@ -40,6 +42,10 @@ client.on(Events.InteractionCreate, interaction => {
   void app.handle(interaction);
 });
 client.once(Events.ClientReady, async ready => {
+  try {
+    const result = await registerGlobalCommands(commandRegistrationApi(ready.rest, ready.application.id));
+    console.info(`コマンド同期: ${result.updated ? `${result.registered}個を更新` : '変更なし'} / 重複削除 ${result.removed}個`);
+  } catch (error) { console.error('コマンド自動同期に失敗しました。Botの起動を続けます。', diagnosticDetails(error)); }
   try {
     const result = await syncApplicationEmojis({
       list: async () => [...(await ready.application.emojis.fetch()).values()],

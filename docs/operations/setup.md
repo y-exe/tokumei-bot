@@ -33,11 +33,11 @@
 
 ```sh
 bun install --frozen-lockfile
-bun run commands
 bun run start
 ```
 
-`commands` は全サーバー向けに登録し、サーバー個別の重複を取り除きます（`--global` も同じ動作です）。
+起動時にコマンドを全サーバー向けへ自動同期します。定義の追加・変更・削除がある場合だけ更新し、サーバー個別の重複も取り除きます。同期失敗時もBotは起動し、次回起動時に再試行します。
+手動で再同期する場合は `bun run commands` を使います（`--global` も同じ動作です）。
 開発用にサーバー個別へ登録する場合だけ、`DISCORD_GUILD_ID` を設定して `bun run commands --guild` を使います。全体向けと同じコマンドは重複登録できません。
 初回起動時にDBのテーブル作成とモデルの取得を行います。
 案内用の絵文字もBotのアプリケーションへ自動追加します。次回以降は再利用し、不足分だけ補充します。サーバーの絵文字枠や手動登録は不要です。追加に失敗した場合は標準絵文字で表示を続けます。
@@ -51,7 +51,7 @@ bun run start
 | 変数 | 内容・既定値 |
 | --- | --- |
 | `DISCORD_BOT_TOKEN` | 必須。Botトークン |
-| `DISCORD_APPLICATION_ID` | コマンド登録時に必須。アプリケーションID |
+| `DISCORD_APPLICATION_ID` | 手動の `commands` 実行時に必要。起動時の自動同期では不要 |
 | `DISCORD_GUILD_ID` | 開発用の `commands --guild` で使うサーバーID |
 | `DATABASE_URL` | DB接続先。代わりに`PGHOST`等のpg接続変数も利用可能 |
 | `ENCRYPTION_KEY` | 必須。32バイトをbase64化したWebhook暗号化鍵 |
