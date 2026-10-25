@@ -46,7 +46,7 @@ export function lookupServer(store:Pick<Store,'lookupAuthor'>,client:Pick<Client
       if(!/^\d{17,20}$/.test(id)){result='<p>メッセージIDは17〜20桁の数字で入力してください。</p>';}
       else{
         const author=await store.lookupAuthor(id);
-        if(!author)result='<p>見つかりませんでした。保存0・削除済み・保存期限切れの投稿は開示できません。</p>';
+        if(!author)result='<p>見つかりませんでした。保存0・削除済み・保存期限切れの投稿や、投稿先を確認できない旧ログは開示できません。</p>';
         else{
           const user=await client.users.fetch(author.user_id).catch(()=>null);
           result=`<hr><dl><dt>ユーザーID</dt><dd>${escape(author.user_id)}</dd><dt>表示名</dt><dd>${escape(user?.globalName??user?.username??'取得不可')}</dd></dl>`;

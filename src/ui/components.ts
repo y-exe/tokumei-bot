@@ -63,7 +63,7 @@ export function help(config: Config): ContainerBuilder {
   const result = card('サーバー固有ルール・使い方', config.policy.rules || 'サーバーのルールに従ってご利用ください。', colors.info);
   result.addSeparatorComponents(new SeparatorBuilder());
   result.addTextDisplayComponents(text(`### ${uiEmoji.check} 投稿方法\n案内のボタン、または \`/post\`・\`/image\`・\`/url\` から投稿できます。\n**編集・削除**は \`/mine\`、または投稿を右クリック・長押しして「アプリ」から行えます。\n${uiEmoji.flag} **通報・返信**も「アプリ」メニューから選べます。`));
-  const privacy=config.policy.retentionDays===0?'**投稿者対応・本文・添付情報はBotのDBに保存しません。**\n投稿履歴を保存しないため、Botによる本人編集・削除・通報は利用できません。':`投稿ログ: **${retentionLabel(config.policy.retentionDays)}**。通報内容: **${retentionLabel(config.policy.reportRetentionDays)}**。\n${uiEmoji.info} Botのデータ管理者は保存情報へアクセスできます。`;
+  const privacy=config.policy.retentionDays===0?'**投稿者対応・本文・添付情報はBotのDBに保存しません。**\n連投対策用の照合情報は一時保存します。投稿履歴を保存しないため、Botによる本人編集・削除・通報は利用できません。':`投稿ログ: **${retentionLabel(config.policy.retentionDays)}**。通報内容: **${retentionLabel(config.policy.reportRetentionDays)}**。\n${uiEmoji.info} Botのデータ管理者は保存情報へアクセスできます。`;
   result.addTextDisplayComponents(text(`### ${uiEmoji.info} 匿名性と保存\n**他のメンバーに投稿者名は表示されません。**\n${privacy}\nDiscord上の投稿はこの設定では削除されません。匿名の表示IDは実ユーザーIDではありません。`));
   if (config.policy.rulesUrl) result.addActionRowComponents(row(new ButtonBuilder().setLabel('サーバールールを開く').setStyle(ButtonStyle.Link).setURL(config.policy.rulesUrl)));
   return result;

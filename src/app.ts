@@ -7,7 +7,7 @@ import { ZodError } from 'zod';
 import { isBotAdmin } from './domain/permissions.js';
 import { isPostingChannel, type PostingChannel } from './domain/channels.js';
 import { defaults, exportTemplate, importTemplate, presetOverrides, resolveConfig, parseRetention, allowsDirectPosts,isRequestMode, type Config, type Preset } from './domain/config.js';
-import { UserError, MediaSafetyError, BlockedWordError, errorMessage } from './domain/errors.js';
+import { UserError, MediaSafetyError, BlockedWordError, FloodControlError, errorMessage } from './domain/errors.js';
 import { maskBlockedWords } from './domain/blocked-words.js';
 import { validateText, type PostInput } from './domain/validation.js';
 import type { Store, ReportNotice } from './infra/store.js';
@@ -16,13 +16,13 @@ import type { MediaService } from './media/service.js';
 import { Posting } from './services/posting.js';
 import { Panels } from './services/panels.js';
 import { button, card, colors, help, panelPayload, payload, row, text } from './ui/components.js';
-import { editSection, editorConfig, editorModal, editorView, managementView, buttonSettingsView, safetyView, type EditorSession } from './ui/editor.js';
+import { editSection, editorConfig, editorModal, editorView, limitsView, managementView, buttonSettingsView, safetyView, type EditorSession } from './ui/editor.js';
 import { input, postModal } from './ui/modals.js';
 import { previewView, type PreviewSession } from './ui/post.js';
 import { Sessions } from './ui/sessions.js';
 import {reportView} from './ui/report.js';
 import {Moderation,punishmentLabels,type Punishment} from './services/moderation.js';
-import { diagnosticCode, diagnosticDetails, parseDiagnosticCode } from './infra/diagnostics.js';
+import { diagnosticCode, diagnosticDetails, minimalDiagnosticDetails, parseDiagnosticCode } from './infra/diagnostics.js';
 import { bugReportUrl, reportOperation } from './ui/bug-report.js';
 import { blockedTextView, type TextAction, type TextRecoverySession } from './ui/text-recovery.js';
 
@@ -86,11 +86,16 @@ export class App {
       if (!(error instanceof UserError) && !(error instanceof ZodError)) {
         title = '処理エラー';
         let code = diagnosticCode();
-        const details = diagnosticDetails(error);
-        const action = interaction.isCommand() ? interaction.commandName : 'customId' in interaction ? interaction.customId.split(':').filter((_, index) => index !== 1).join(':').slice(0, 100) : '不明';
+        let privateMode = true;
+        try { privateMode = (await this.store.settings(interaction.guildId!, interaction.channelId!, true)).config.policy.retentionDays === 0; } catch {}
+        const details = privateMode ? minimalDiagnosticDetails(error) : diagnosticDetails(error);
+        const action = privateMode ? reportOperation(interaction) : interaction.isCommand() ? interaction.commandName : 'customId' in interaction ? interaction.customId.split(':').filter((_, index) => index !== 1).join(':').slice(0, 100) : '不明';
+        const guildId = privateMode && interaction.guildId ? this.secrets.fingerprint('diagnostic-guild', interaction.guildId) : interaction.guildId;
+        const channelId = privateMode && interaction.channelId ? this.secrets.fingerprint('diagnostic-channel', interaction.channelId) : interaction.channelId;
+        const interactionId = privateMode ? this.secrets.fingerprint('diagnostic-operation', interaction.id) : interaction.id;
         try {
           for (let attempt = 0; ; attempt++) {
-            try { await this.store.saveDiagnostic(code, interaction.guildId, interaction.channelId, interaction.id, action, details); break; }
+            try { await this.store.saveDiagnostic(code, guildId, channelId, interactionId, action, details, privateMode); break; }
             catch (saveError) {
               if (attempt >= 4 || !(saveError instanceof Error) || (saveError as Error & { code?: string }).code !== '23505') throw saveError;
               code = diagnosticCode();
@@ -98,12 +103,12 @@ export class App {
           }
         }
         catch { console.error('エラー詳細のDB保存に失敗しました', { code }); }
-        console.error('操作を処理できませんでした', { code, action, interactionId: interaction.id, details });
+        console.error('操作を処理できませんでした', { code, action, interactionId, details });
         reportCode = code;
         message += `\n\nエラーID: \`${code}\``;
       }
       const view = card(title, message, colors.danger);
-      if (!(error instanceof MediaSafetyError) && !(error instanceof ZodError)) {
+      if (!(error instanceof MediaSafetyError) && !(error instanceof FloodControlError) && !(error instanceof ZodError)) {
         view.addActionRowComponents(row(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('バグを報告')
           .setURL(bugReportUrl(reportOperation(interaction), reportCode, occurredAt))));
       }
@@ -119,8 +124,9 @@ export class App {
         if (!isBotAdmin(interaction.user.id) && !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) throw new UserError('エラー詳細の確認にはサーバー管理権限が必要です。');
         const code = parseDiagnosticCode(interaction.options.getString('code', true));
         if (!code) throw new UserError('表示されたエラーIDを指定してください。');
-        const record = await this.store.diagnostic(code, interaction.guildId!);
-        if (!record) throw new UserError('このサーバーの30日以内のエラーが見つかりません。');
+        const record = (await this.store.diagnostic(code, interaction.guildId!))
+          ?? (await this.store.diagnostic(code, this.secrets.fingerprint('diagnostic-guild', interaction.guildId!)));
+        if (!record) throw new UserError('このサーバーの保存期間内のエラーが見つかりません。');
         await this.respond(interaction, [card(`エラー詳細: ${code}`, `操作: ${record.action}\n発生時刻: ${record.created_at.toISOString()}\n\n${record.details.slice(0, 3000).replaceAll('`', 'ˋ')}`, colors.warning)]); return;
       }
       case 'setup':
@@ -159,6 +165,8 @@ export class App {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const attachment = interaction.options.getAttachment('file') ?? interaction.options.getAttachment('attachment');
         if (!attachment) throw new UserError('投稿するファイルを添付してください。');
+        await this.posting.preflight({ guildId: interaction.guildId!, channelId: interaction.channelId!, userId: interaction.user.id, operationId: interaction.id,
+          text: interaction.options.getString('text') ?? interaction.options.getString('content') ?? '' }, settings.config);
         const files = await this.media.attachments([attachment.url], settings.config);
         await this.send(interaction, interaction.options.getString('text') ?? interaction.options.getString('content') ?? '', files); return;
       }
@@ -201,6 +209,7 @@ export class App {
       if (!settings.enabled) throw new UserError('このチャンネルには匿名投稿が設置されていません。');
       validateText(url, settings.config, 1800, 'source'); validateText(content, settings.config);
       if (!settings.config.content.caption && content.trim()) throw new UserError('このチャンネルでは画像に説明文を付けられません。');
+      await this.posting.preflight({ guildId: interaction.guildId!, channelId: interaction.channelId!, userId: interaction.user.id, operationId: interaction.id, text: content }, settings.config);
       const result = await this.media.fromUrl(url, settings.config);
       const session: PreviewSession = { owner: interaction.user.id, guildId: interaction.guildId!, channelId: interaction.channelId!,
         files: result.files, source: result.source, text: content, warnings: result.warnings, selected: result.files.map((_, index) => index), sending: false, videoLinks: result.videoLinks };
@@ -400,9 +409,9 @@ export class App {
     else if (action === 'export') {
       await interaction.reply({ content: 'この下書きの設定です。Webhookなどの秘密情報は含まれません。', flags: MessageFlags.Ephemeral,
         files: [new AttachmentBuilder(Buffer.from(exportTemplate(session.value)), { name: 'anonymous.json' })] }); return;
-    } else if (!['back', 'management','buttons','safetyview'].includes(action)) { await interaction.showModal(editorModal(id, action, editorConfig(session))); return; }
+    } else if (!['back', 'management','buttons','safetyview','limits'].includes(action)) { await interaction.showModal(editorModal(id, action, editorConfig(session))); return; }
     const management = ['management', 'roles', 'allowedroles', 'reportchannel', 'logchannel', 'directposts'].includes(action);
-    await interaction.update({ components: ['safety','safetyview'].includes(action)?safetyView(id,session):action==='buttons'?buttonSettingsView(id,session):management ? managementView(id, session) : editorView(id, session), allowedMentions: emptyMentions });
+    await interaction.update({ components: action === 'limits' ? limitsView(id) : ['safety','safetyview'].includes(action)?safetyView(id,session):action==='buttons'?buttonSettingsView(id,session):management ? managementView(id, session) : editorView(id, session), allowedMentions: emptyMentions });
   }
   async saveEditor(interaction: UIInteraction, id: string, session: EditorSession): Promise<void> {
     const channel = await this.channel(session.guildId, session.channelId);
@@ -424,7 +433,8 @@ export class App {
       if (missing.length) throw new UserError(`${purpose}（<#${target}>）でBotに「${missing.join('・')}」を許可してください。`);
     }
     const affected = session.scope === 'guild' ? await this.store.configuredChannels(session.guildId) : [session.channelId];
-    await this.store.saveSettings(session.original, session.scope, session.value, session.owner);
+    const actor = config.policy.retentionDays === 0 ? this.secrets.fingerprint('settings-actor', session.guildId, interaction.user.id) : interaction.user.id;
+    await this.store.saveSettings(session.original, session.scope, session.value, actor);
     const failed: string[] = [];
     for (const channelId of affected) {
       try {
@@ -460,6 +470,7 @@ export class App {
       const content = interaction.fields.fields.has('text') ? field('text') : '';
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
       if (kind === 'url') { await this.prepareUrl(interaction, field('url'), content); return; }
+      await this.posting.preflight({ guildId: interaction.guildId!, channelId: interaction.channelId!, userId: interaction.user.id, operationId: interaction.id, text: content }, settings.config);
       const files = kind === 'image' ? await this.media.attachments([...interaction.fields.getUploadedFiles('files', true).values()].map(file => file.url), settings.config) : [];
       await this.send(interaction, content, files, undefined, prefix === 'reply' || prefix === 'replyimage' ? id : undefined); return;
     }
@@ -520,7 +531,9 @@ export class App {
         case 'images': editSection(copy, 'panel', { image: field('image'), thumbnail: field('thumbnail') }); break;
         case 'labels': editSection(copy, 'panel', { textLabel: field('textLabel'), imageLabel: field('imageLabel'), urlLabel: field('urlLabel'), helpLabel: field('helpLabel'), ...(field('urlLabel')!==editorConfig(copy).panel.urlLabel?{urlAutoLabel:false}:{}) }); break;
         case 'rules': editSection(copy, 'policy', { rules: field('rules'), rulesUrl: field('rulesUrl') }); break;
-        case 'limits': editSection(copy, 'policy', { cooldown: Number(field('cooldown')) }); editSection(copy, 'moderation', { reportThreshold: Number(field('threshold')) }); break;
+        case 'limitsbasic': editSection(copy, 'policy', { cooldown: Number(field('cooldown')) }); editSection(copy, 'moderation', { reportThreshold: Number(field('threshold')) }); break;
+        case 'spam': editSection(copy, 'policy', { postsPerMinute: Number(field('posts')), charsPerMinute: Number(field('chars60')),
+          charsPerFiveMinutes: Number(field('chars300')), spamTimeoutMinutes: Number(field('timeout')), duplicateSeconds: Number(field('duplicate')) }); break;
         case 'identity': {
           if (!['on', 'off'].includes(selected('showId').toLowerCase())) throw new UserError('匿名IDの表示を選択してください。');
           editSection(copy, 'identity', { showId: selected('showId').toLowerCase() === 'on', minutes: Number(field('minutes')) });

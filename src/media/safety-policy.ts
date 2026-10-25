@@ -103,7 +103,7 @@ export async function checkMediaSafety(data: Buffer, config: Config, name = '', 
       } finally { await rm(directory, { recursive: true, force: true }); }
     } catch (error) {
       if (error instanceof UserError) throw error;
-      console.error('[safety] メディア判定失敗', error instanceof Error ? error.message : 'unknown');
+      console.error('[safety] メディア判定失敗');
       throw new UserError('画像・動画の安全判定に失敗したため投稿できません。壊れたファイル、10分を超える動画、または管理者の設定を確認してください。');
     }
   });

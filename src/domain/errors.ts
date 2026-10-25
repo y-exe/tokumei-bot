@@ -1,5 +1,8 @@
 export class UserError extends Error {}
 export class MediaSafetyError extends UserError {}
+export class FloodControlError extends UserError {
+  constructor() { super('現在、利用が制限されています。'); }
+}
 export class BlockedWordError extends UserError {
   constructor(readonly words: string[], readonly maxLength = 1800, readonly scope: 'body' | 'source' = 'body') {
     const labels = words.slice(0, 12).map(word => `\`${word.replaceAll('`', 'ˋ').replace(/[\r\n]/g, ' ')}\``).join('・');

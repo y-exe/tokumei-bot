@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'node:crypto';
 
 export class SecretBox {
   private key: Buffer;
@@ -11,6 +11,9 @@ export class SecretBox {
     const cipher = createCipheriv('aes-256-gcm', this.key, iv);
     const data = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
     return [iv, cipher.getAuthTag(), data].map(part => part.toString('base64')).join('.');
+  }
+  fingerprint(kind: string, ...values: string[]): string {
+    return createHmac('sha256', this.key).update(JSON.stringify(['flood-control-v1', kind, ...values])).digest('hex');
   }
   open(value: string): string {
     const [iv, tag, data] = value.split('.').map(part => Buffer.from(part, 'base64'));

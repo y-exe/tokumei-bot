@@ -5,7 +5,7 @@ import { PermissionsBitField, type Client, type RepliableInteraction, type Butto
 import { App } from '../src/app.js';
 import { defaults } from '../src/domain/config.js';
 import { validatePost, validateText, type PostInput } from '../src/domain/validation.js';
-import { UserError, BlockedWordError } from '../src/domain/errors.js';
+import { UserError, BlockedWordError, FloodControlError } from '../src/domain/errors.js';
 import type { Store } from '../src/infra/store.js';
 import { SecretBox } from '../src/infra/secrets.js';
 import { MediaService } from '../src/media/service.js';
@@ -22,7 +22,7 @@ function nodes(value:any):any[] {
 function fixture() {
   const config=structuredClone(defaults);config.policy.blockedWords=['改造'];
   const snapshot={guildId:'guild',channelId:'channel',base:config,config,overrides:{},guildVersion:0,channelVersion:0,enabled:true,panelId:null,webhook:null};
-  const bot=new App({} as Client,{settings:async()=>snapshot} as unknown as Store,new SecretBox(randomBytes(32).toString('base64')),new MediaService());
+  const bot=new App({} as Client,{settings:async()=>snapshot,checkFlood:async()=>{}} as unknown as Store,new SecretBox(randomBytes(32).toString('base64')),new MediaService());
   const views:any[]=[];const posts:PostInput[]=[];const edits:{id:string;text:string}[]=[];
   bot.respond=async(_interaction,components)=>{views.push(components.map(component=>component.toJSON()));};
   bot.panels.bump=async()=>{};
@@ -32,6 +32,21 @@ function fixture() {
   const click=(id:string,action:string,overrides:Record<string,unknown>={})=>request({customId:`blocked:${id}:${action}`,...overrides}) as ButtonInteraction;
   return {bot,config,views,posts,edits,recoveryId,click};
 }
+
+test('連投制限中はURL・添付の取得前に止め、公開案内に理由・時間・エラーID・報告ボタンを出さない', async () => {
+  const f = fixture(); let downloads = 0;
+  f.bot.posting.preflight = async () => { throw new FloodControlError(); };
+  f.bot.media.fromUrl = async () => { downloads++; throw new Error('取得されるべきではありません'); };
+  f.bot.media.attachments = async () => { downloads++; throw new Error('取得されるべきではありません'); };
+  await assert.rejects(f.bot.prepareUrl(request(), 'https://example.com/image.jpg', '画像'), FloodControlError);
+  await assert.rejects(f.bot.modal(request({ customId: 'submit:image', fields: { fields: new Map([['text', {}]]), getTextInputValue: () => '画像' } }) as ModalSubmitInteraction), FloodControlError);
+  f.bot.component = async () => { throw new FloodControlError(); };
+  await f.bot.handle(request({ isRepliable: () => true, isChatInputCommand: () => false, isMessageContextMenuCommand: () => false }) as any);
+  assert.equal(downloads, 0);
+  const result = JSON.stringify(f.views.at(-1));
+  assert.ok(result.includes('現在、利用が制限されています。'));
+  for (const hidden of ['3000', '9000', '10分', 'エラーID', 'バグを報告']) assert.ok(!result.includes(hidden));
+});
 
 test('拒否した本文を編集モーダルへ戻し、添付・返信先・出典を保って伏字で再送できる',async()=>{
   const f=fixture();const text='Switch2改造\n改造の話';

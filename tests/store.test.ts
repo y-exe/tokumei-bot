@@ -26,6 +26,23 @@ test('エラー詳細は再読み込みでき別サーバーには開示せず30
   assert.equal((await store.pool.query('SELECT count(*)::int AS count FROM v2_diagnostics')).rows[0].count, 0);
 });
 
+test('保存0の最小診断は24時間で失効し、保存0チャンネルの旧診断も削除する', async () => {
+  await store.saveDiagnostic('11223344', 'hashed-guild', 'hashed-channel', 'hashed-operation', '匿名投稿', 'Error code=23505', true);
+  const row = (await store.pool.query("SELECT expires_at,created_at FROM v2_diagnostics WHERE code='11223344'")).rows[0];
+  assert.equal(new Date(row.expires_at).getTime() - new Date(row.created_at).getTime(), 86400000);
+  assert.ok(await store.diagnostic('11223344', 'hashed-guild'));
+  const target = '200000000000000098';
+  await store.saveSettings(await store.settings(guild, target, true), 'channel', { policy: { retentionDays: 0 } }, actor);
+  await store.saveDiagnostic('55667788', guild, target, 'legacy-operation', '投稿', '旧エラー内容');
+  await store.cleanup();
+  assert.equal((await store.pool.query("SELECT 1 FROM v2_diagnostics WHERE code='55667788'")).rowCount, 0);
+  assert.ok(await store.diagnostic('11223344', 'hashed-guild'));
+  await store.pool.query("UPDATE v2_diagnostics SET expires_at=now()-interval '1 second' WHERE code='11223344'");
+  assert.equal(await store.diagnostic('11223344', 'hashed-guild'), null);
+  await store.cleanup();
+  assert.equal((await store.pool.query("SELECT 1 FROM v2_diagnostics WHERE code='11223344'")).rowCount, 0);
+});
+
 test('処罰中の追加通報と二重実行を拒否し、要望の永久停止は通常投稿へ影響しない',async()=>{
   const g='moderation-g',c='moderation-c',m='moderation-m';
   await store.settings(g,c,true);const config=structuredClone(defaults);config.policy.cooldown=0;

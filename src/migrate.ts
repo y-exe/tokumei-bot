@@ -36,7 +36,7 @@ console.info(JSON.stringify({ mode: args.includes('--apply') ? 'apply' : 'dryrun
 if (args.includes('--apply')) {
   const target = process.env.MIGRATION_TARGET_DATABASE_URL; const key = process.env.ENCRYPTION_KEY;
   if (!target || !key) throw new Error('移行先は MIGRATION_TARGET_DATABASE_URL と ENCRYPTION_KEY を明示してください。既存のDATABASE_URLは自動使用しません。');
-  const store = new Store(target);
-  try { await store.initialize(); await applyLegacy(store, new SecretBox(key), plan); console.info('移行データを保存しました。匿名投稿の受付は停止したままです。'); }
+  const box = new SecretBox(key); const store = new Store(target, box);
+  try { await store.initialize(); await applyLegacy(store, box, plan); console.info('移行データを保存しました。匿名投稿の受付は停止したままです。'); }
   finally { await store.close(); }
 }

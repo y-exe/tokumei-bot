@@ -32,6 +32,11 @@ export const identitySchema = z.object({ showId: z.boolean(), minutes: z.number(
 export const policySchema = z.object({
   rules: z.string().max(2500), rulesUrl: publicUrl,
   cooldown: z.number().int().min(0).max(3600),
+  postsPerMinute: z.number().int().min(0).max(100).default(5),
+  charsPerMinute: z.number().int().min(0).max(100000).default(3000),
+  charsPerFiveMinutes: z.number().int().min(0).max(500000).default(9000),
+  spamTimeoutMinutes: z.number().int().min(1).max(1440).default(10),
+  duplicateSeconds: z.number().int().min(0).max(3600).default(300),
   blockedWords: z.array(z.string().min(1).max(100)).max(200),
   blockedDomains: z.array(z.string().regex(/^(?:[a-z0-9-]+\.)+[a-z]{2,}$/i)).max(200),
   allowedRoles: z.array(snowflake).max(20),
@@ -54,7 +59,13 @@ export const configSchema = z.object({
 });
 export const overridesSchema = z.object({
   panel: panelSchema.partial().optional(), content: contentSchema.partial().optional(),
-  identity: identitySchema.partial().optional(), policy: policySchema.partial().optional(),
+  identity: identitySchema.partial().optional(), policy: policySchema.partial().extend({
+    postsPerMinute: policySchema.shape.postsPerMinute.removeDefault().optional(),
+    charsPerMinute: policySchema.shape.charsPerMinute.removeDefault().optional(),
+    charsPerFiveMinutes: policySchema.shape.charsPerFiveMinutes.removeDefault().optional(),
+    spamTimeoutMinutes: policySchema.shape.spamTimeoutMinutes.removeDefault().optional(),
+    duplicateSeconds: policySchema.shape.duplicateSeconds.removeDefault().optional(),
+  }).optional(),
   moderation: moderationSchema.partial().optional(),
 }).strict();
 export type Config = z.infer<typeof configSchema>;
@@ -89,7 +100,8 @@ export const defaults: Config = {
     maxFiles: 10, maxFileMB: 10, providers: ['x', 'pixiv', 'direct', 'bluesky', 'mastodon', 'misskey', 'tiktok', 'instagram', 'threads'] },
   identity: { showId: true, minutes: 20, kind:'chat' },
   policy: { rules: '個人への攻撃や個人情報の投稿は禁止です。サーバーのルールに従ってご利用ください。',
-    rulesUrl: '', cooldown: 5, blockedWords: [], blockedDomains: [], allowedRoles: [], retentionDays: null, reportRetentionDays: null },
+    rulesUrl: '', cooldown: 5, postsPerMinute: 5, charsPerMinute: 3000, charsPerFiveMinutes: 9000, spamTimeoutMinutes: 10, duplicateSeconds: 300,
+    blockedWords: [], blockedDomains: [], allowedRoles: [], retentionDays: null, reportRetentionDays: null },
   moderation: { managerRoles: [], reportChannel: null, logChannel: null, reportThreshold: 3, allowDirectPosts: false },
 };
 

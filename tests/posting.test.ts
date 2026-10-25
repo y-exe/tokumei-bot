@@ -17,10 +17,12 @@ const guild = '100000000000000010'; const channel = '200000000000000010'; const 
 const sent: unknown[] = []; const edited: unknown[] = []; let deletes = 0;
 before(async () => {
   db = await PGlite.create(); server = new PGLiteSocketServer({ db, port: 0, host: '127.0.0.1', maxConnections: 5 }); await server.start();
-  store = new Store(`postgresql://postgres:postgres@${server.getServerConn()}/postgres`); await store.initialize();
-  const box = new SecretBox(randomBytes(32).toString('base64')); secrets = box; posting = new Posting(store, box);
+  const box = new SecretBox(randomBytes(32).toString('base64')); secrets = box;
+  store = new Store(`postgresql://postgres:postgres@${server.getServerConn()}/postgres`, box); await store.initialize();
+  posting = new Posting(store, box);
   const settings = await store.settings(guild, channel);
-  await store.saveSettings(settings, 'channel', { policy: { cooldown: 0 } }, user);
+  await store.saveSettings(settings, 'guild', { ...structuredClone(defaults), policy: { ...defaults.policy, postsPerMinute: 0, charsPerMinute: 0, charsPerFiveMinutes: 0, duplicateSeconds: 0 } }, user);
+  await store.saveSettings(await store.settings(guild, channel, true), 'channel', { policy: { cooldown: 0 } }, user);
   await store.setPanel(guild, channel, 'panel', box.seal(`https://discord.com/api/webhooks/500000000000000010/${'a'.repeat(68)}`));
   mock.method(WebhookClient.prototype, 'send', async (options: unknown) => {
     sent.push(options); return { id: `6000000000000000${sent.length.toString().padStart(2, '0')}`, attachments: [] };
@@ -141,7 +143,7 @@ test('停止中は受付を拒否し、設定変更後の画像必須・編集�
   await store.disable(guild, channel); await assert.rejects(posting.publish(post('stopped')), /設置されていません/);
 });
 
-test('保存0でも送信でき、投稿・投稿者・セッションをDBに作成しない(番号と見た目だけは保持する)',async()=>{
+test('保存0でも送信でき、投稿・投稿者・セッションをDBに作成しない',async()=>{
   const target='200000000000000011';const settings=await store.settings(guild,target,true);
   await store.saveSettings(settings,'channel',{policy:{retentionDays:0,reportRetentionDays:0,cooldown:0}},user);
   const credential=(await store.settings(guild,channel,true)).webhook!;await store.setPanel(guild,target,'panel',credential);
@@ -254,4 +256,24 @@ test('公開済みの投稿編集でも禁止語を確認し、拒否した編�
   assert.equal((await store.post(guild,target,messageId))!.content,'匿名テスト');
   await posting.edit(guild,target,messageId,user,'Switch2＊＊');
   assert.equal(edited.length,before+1);assert.equal((await store.post(guild,target,messageId))!.content,'Switch2＊＊');
+});
+
+test('保存あり・なしの投稿をサーバー単位で合算し、同一本文と6件目を送信前に止める', async () => {
+  const targetGuild = '100000000000000099';
+  const targets = ['200000000000000098', '200000000000000099'];
+  const credential = (await store.settings(guild, channel, true)).webhook!;
+  for (const [index, target] of targets.entries()) {
+    await store.saveSettings(await store.settings(targetGuild, target, true), 'channel', { policy: { cooldown: 0, retentionDays: index ? 0 : null } }, user);
+    await store.setPanel(targetGuild, target, 'panel', credential);
+  }
+  const input = { ...post('flood-first'), guildId: targetGuild, channelId: targets[1]!, text: '同一本文' };
+  const before = sent.length;
+  await posting.publish(input);
+  await assert.rejects(posting.publish({ ...input, operationId: 'flood-duplicate', channelId: targets[0]! }), /現在、利用が制限されています。/);
+  for (let i = 1; i < 5; i++) await posting.publish({ ...input, operationId: `flood-${i}`, channelId: targets[i % 2]!, text: `別の本文${i}` });
+  await assert.rejects(new Posting(store, secrets).publish({ ...input, operationId: 'flood-sixth', text: '6件目' }), /現在、利用が制限されています。/);
+  assert.equal(sent.length - before, 5);
+  assert.equal((await store.pool.query('SELECT 1 FROM v2_posts WHERE channel_id=$1', [targets[1]])).rowCount, 0);
+  assert.equal((await store.pool.query('SELECT 1 FROM v2_sessions WHERE channel_id=$1', [targets[1]])).rowCount, 0);
+  assert.equal((await store.pool.query('SELECT 1 FROM v2_authors WHERE operation_id=$1', [input.operationId])).rowCount, 0);
 });

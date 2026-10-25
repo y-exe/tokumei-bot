@@ -12,6 +12,7 @@ import {isRequestMode} from '../domain/config.js';
 import { deliveryError } from './delivery-error.js';
 import { checkMediaSafety } from '../media/safety-policy.js';
 import { SafeHttp, MAX_DOWNLOAD_BYTES } from '../media/http.js';
+import { isBotAdmin } from '../domain/permissions.js';
 
 export class Posting {
   private queue = new SerialQueue(Number.POSITIVE_INFINITY);
@@ -27,6 +28,17 @@ export class Posting {
   }
   constructor(readonly store: Store, readonly secrets: SecretBox,
     readonly threadIdFor: (guildId: string, channelId: string) => Promise<string | undefined> = async () => undefined) {}
+  async preflight(input: Pick<PostInput, 'guildId' | 'channelId' | 'userId' | 'operationId' | 'text'>, config?: Config, consume = false): Promise<void> {
+    if (isBotAdmin(input.userId)) return;
+    config ??= (await this.store.settings(input.guildId, input.channelId, true)).config;
+    const body = input.text.normalize('NFKC').trim();
+    await this.store.checkFlood(this.secrets.fingerprint('user', input.guildId, input.userId), {
+      chars: [...input.text].length,
+      hash: body ? this.secrets.fingerprint('body', input.guildId, input.userId, body) : '',
+      operationId: this.secrets.fingerprint('operation', input.operationId),
+      channelId: this.secrets.fingerprint('channel', input.guildId, input.channelId),
+    }, config.policy, consume);
+  }
   async publish(input: PostInput): Promise<string> {
     return this.queue.run(`${input.guildId}:${input.channelId}`, input.media.reduce((sum, file) => sum + file.data.length, 0), () => this.publishLocked(input));
   }
@@ -34,6 +46,7 @@ export class Posting {
     const settings = await this.store.settings(input.guildId, input.channelId, true);
     if (!settings.enabled || !settings.webhook) throw new UserError('このチャンネルには匿名投稿が設置されていません。');
     validatePost(input, settings.config);
+    await this.preflight(input, settings.config);
     for (const file of input.media) await checkMediaSafety(file.data, settings.config, file.name, '', file.safety);
     for (const url of input.videoLinks ?? []) {
       const response = await new SafeHttp().get(url, MAX_DOWNLOAD_BYTES);
@@ -44,6 +57,7 @@ export class Posting {
     const linked=settings.config.policy.retentionDays===0?input.text:await this.linkReferences(input.text,input.guildId,input.channelId,new Date());
     const content = postContent(linked, input.source, input.replyTo, input.guildId, input.channelId,reply?.anonymous_id, input.videoLinks);
     if (content.length > 2000) throw new UserError('出典・返信リンクを含めて2000文字以内になるように本文を短くしてください。');
+    await this.preflight(input, settings.config, true);
     if(settings.config.policy.retentionDays===0)return this.publishWithoutLog(input,settings.config,settings.webhook,content);
     const threadId = await this.threadIdFor(input.guildId, input.channelId);
     const reserved = await this.store.reserve(input, settings.config, settings.webhook);
@@ -74,21 +88,20 @@ export class Posting {
     const now=Date.now();
     for(const [operation,at] of this.attempts)if(at<now-600_000)this.attempts.delete(operation);
     if(this.attempts.has(input.operationId))throw new UserError('この投稿は処理済みです。再送は行いません。');
-    const restriction=(await this.store.pool.query('SELECT 1 FROM v2_restrictions WHERE guild_id=$1 AND user_id=$2 AND (expires_at IS NULL OR expires_at>now())',[input.guildId,input.userId])).rows[0];
-    if(restriction)throw new UserError('このサーバーでは匿名投稿の利用が制限されています。');
-    if(isRequestMode(config)&&(await this.store.pool.query('SELECT 1 FROM v2_request_restrictions WHERE guild_id=$1 AND user_id=$2',[input.guildId,input.userId])).rowCount)throw new UserError('このサーバーでは匿名要望の使用権が剥奪されています。');
+    await this.store.checkRestrictions(input.guildId,input.userId,isRequestMode(config));
     const key=`${input.guildId}:${input.channelId}`;
+    const userKey=this.secrets.fingerprint('user',input.guildId,input.userId);
     const state=this.volatile.get(key)??{lastUser:'',users:new Map()};
     for(const [user,session] of state.users)if(session.at<now-Math.max(config.policy.cooldown*1000,config.identity.minutes*60_000))state.users.delete(user);
-    const previous=state.users.get(input.userId);const age=previous?now-previous.at:Infinity;
+    const previous=state.users.get(userKey);const age=previous?now-previous.at:Infinity;
     if(age<config.policy.cooldown*1000)throw new UserError(`連続投稿は${Math.ceil(config.policy.cooldown-age/1000)}秒後にできます。`);
-    const inherit=previous&&state.lastUser===input.userId&&age<config.identity.minutes*60_000;
+    const inherit=previous&&state.lastUser===userKey&&age<config.identity.minutes*60_000;
     const persisted=(await this.store.pool.query(`INSERT INTO v2_counters(channel_id) VALUES($1)
       ON CONFLICT(channel_id) DO UPDATE SET counter=v2_counters.counter RETURNING counter,last_avatar`,[input.channelId])).rows[0];
     const anonymousId=inherit?previous.anonymousId:Number(persisted.counter)%1000+1;
     const avatar=inherit?previous.avatar:nextAvatar(persisted.last_avatar==null?undefined:Number(persisted.last_avatar));
     await this.store.pool.query('UPDATE v2_counters SET counter=$2,last_avatar=$3,last_user=NULL WHERE channel_id=$1',[input.channelId,anonymousId,avatar]);
-    state.lastUser=input.userId;state.users.set(input.userId,{anonymousId,avatar,at:now});this.volatile.set(key,state);
+    state.lastUser=userKey;state.users.set(userKey,{anonymousId,avatar,at:now});this.volatile.set(key,state);
     this.attempts.set(input.operationId,now);
     const webhook=new WebhookClient({url:this.secrets.open(credential)});
     try{

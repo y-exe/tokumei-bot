@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { diagnosticCode, diagnosticDetails, parseDiagnosticCode } from '../src/infra/diagnostics.js';
+import { diagnosticCode, diagnosticDetails, minimalDiagnosticDetails, parseDiagnosticCode } from '../src/infra/diagnostics.js';
 
 test('エラーコードは照会可能な形式で重複しない', () => {
   const codes = Array.from({ length: 100 }, diagnosticCode);
@@ -34,4 +34,14 @@ test('PixivのセッションCookieをエラー詳細に残さない', () => {
   const previous=process.env.PIXIV_PHPSESSID;process.env.PIXIV_PHPSESSID='test-private-pixiv-session';
   try {assert.ok(!diagnosticDetails(new Error('Cookie: PHPSESSID=test-private-pixiv-session')).includes('test-private-pixiv-session'));}
   finally {if(previous===undefined)delete process.env.PIXIV_PHPSESSID;else process.env.PIXIV_PHPSESSID=previous;}
+});
+
+test('保存0のエラー記録は本文・ID・スタックを捨て、種類と安全なコードだけを残す', () => {
+  const error = Object.assign(new Error('300000000000000123 非公開の本文 https://example.com/private'), { code: '23505' });
+  error.name = '非公開の名前';
+  const result = minimalDiagnosticDetails(new AggregateError([error], '非公開の集約メッセージ'));
+  assert.ok(result.includes('code=23505')); assert.ok(result.includes('AggregateError'));
+  for (const secret of ['300000000000000123', '非公開', 'example.com', 'diagnostics.test.ts']) assert.ok(!result.includes(secret));
+  assert.ok(!minimalDiagnosticDetails(Object.assign(new Error('秘密'), { code: '300000000000000123' })).includes('300000000000000123'));
+  assert.ok(!diagnosticDetails(new Error('user=300000000000000123 code=50035')).includes('300000000000000123'));
 });

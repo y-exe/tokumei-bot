@@ -62,6 +62,20 @@ test('下書きは本人とサーバーで分離し、容量・期限を制限�
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.throws(() => sessions.get(id, 'alice', 'a'), /有効期限/);
 });
+
+test('画面セッションは所有者IDを平文保持せず、取得時にHMACで本人を確認する', () => {
+  const sessions = new Sessions();
+  const original = { owner: '300000000000000123', guildId: 'guild', channelId: 'channel' };
+  const id = sessions.create(original);
+  const session = sessions.get(id, original.owner, original.guildId);
+  assert.match(session.owner, /^[a-f0-9]{64}$/);
+  assert.ok(!JSON.stringify([...((sessions as any).values as Map<string, unknown>).values()]).includes(original.owner));
+  assert.equal(original.owner, '300000000000000123');
+  assert.throws(() => sessions.get(id, session.owner, original.guildId), /本人/);
+  const another = new Sessions();
+  const second = another.create(original);
+  assert.notEqual(another.get(second, original.owner, original.guildId).owner, session.owner);
+});
 test('Webhook資格情報は暗号化し、改ざんを検知する', () => {
   const box = new SecretBox(randomBytes(32).toString('base64'));
   const encrypted = box.seal('https://discord.com/api/webhooks/123/private');

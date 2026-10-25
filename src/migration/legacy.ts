@@ -127,14 +127,14 @@ export async function applyLegacy(store: Store, box: SecretBox, plan: MigrationP
       await client.query(`INSERT INTO v2_posts(operation_id,guild_id,channel_id,message_id,content,anonymous_id,avatar,status,media,expires_at,created_at,layout,legacy_webhook)
         VALUES($1,$2,$3,$4,$5,$6,0,'sent',$7,$8,$9,'legacy',$10) ON CONFLICT DO NOTHING`,
         [operation, post.guildId, post.channelId, post.messageId, post.content, post.anonymousId, JSON.stringify(post.media), post.expires, post.createdAt, box.seal(post.webhook)]);
-      await client.query('INSERT INTO v2_authors(operation_id,user_id,expires_at) VALUES($1,$2,$3) ON CONFLICT DO NOTHING', [operation, post.userId, post.expires]);
+      await client.query('INSERT INTO v2_authors(operation_id,user_id,expires_at,user_ciphertext) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING', [operation, store.identityKey(post.guildId, post.userId), post.expires, store.sealIdentity(post.userId)]);
     }
     for (const counter of plan.counters)
-      await client.query('INSERT INTO v2_counters(channel_id,counter,last_user) VALUES($1,$2,$3) ON CONFLICT DO NOTHING', [counter.channelId, counter.counter, counter.lastUser]);
+      await client.query('INSERT INTO v2_counters(channel_id,counter,last_user) VALUES($1,$2,$3) ON CONFLICT DO NOTHING', [counter.channelId, counter.counter, counter.lastUser ? store.identityKey(plan.channels.find(channel => channel.channelId === counter.channelId)!.guildId, counter.lastUser) : null]);
     for (const session of plan.sessions)
-      await client.query('INSERT INTO v2_sessions(guild_id,channel_id,user_id,anonymous_id,avatar,last_post) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING', [session.guildId, session.channelId, session.userId, session.anonymousId, session.avatar, session.lastPost]);
+      await client.query('INSERT INTO v2_sessions(guild_id,channel_id,user_id,anonymous_id,avatar,last_post) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING', [session.guildId, session.channelId, store.identityKey(session.guildId, session.userId), session.anonymousId, session.avatar, session.lastPost]);
     for (const restriction of plan.restrictions)
-      await client.query("INSERT INTO v2_restrictions(guild_id,user_id,expires_at,reason) VALUES($1,$2,$3,'旧Botから移行') ON CONFLICT DO NOTHING", [restriction.guildId, restriction.userId, restriction.expires]);
+      await client.query("INSERT INTO v2_restrictions(guild_id,user_id,expires_at,reason) VALUES($1,$2,$3,'旧Botから移行') ON CONFLICT DO NOTHING", [restriction.guildId, store.identityKey(restriction.guildId, restriction.userId), restriction.expires]);
   });
   for (const guildId of plan.guilds.keys()) store.invalidate(guildId);
 }

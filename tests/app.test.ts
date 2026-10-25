@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { PermissionFlagsBits, PermissionsBitField, ComponentType, ChannelType } from 'discord.js';
@@ -13,7 +13,7 @@ import type { Client, RepliableInteraction, ButtonInteraction, ModalSubmitIntera
 
 const snapshot = { guildId: 'g', channelId: 'c', base: structuredClone(defaults), config: structuredClone(defaults), overrides: {}, guildVersion: 0, channelVersion: 0, enabled: true, panelId: null, webhook: null };
 function app() {
-  return new App({} as Client, { settings: async () => structuredClone(snapshot), reportDetail: async () => null } as unknown as Store,
+  return new App({} as Client, { settings: async () => structuredClone(snapshot), reportDetail: async () => null, checkFlood: async () => {} } as unknown as Store,
     new SecretBox(randomBytes(32).toString('base64')), new MediaService());
 }
 function interaction(overrides: Record<string, unknown> = {}) {
@@ -70,6 +70,37 @@ test('短いエラーIDの保存が衝突した場合は再生成したIDを表�
   assert.ok(shown.includes('`' + attempted[1] + '`'));
   const reportUrl = JSON.parse(shown)[0].components.flatMap((component:{components?:unknown[]})=>component.components??[]).find((component:{url?:string})=>component.url)?.url;
   assert.equal(new URL(reportUrl).searchParams.get('diagnostics')!.split('\n').at(-1), `エラーID: ${attempted[1]}`);
+});
+
+test('保存0と設定取得不能時のエラーは本文を記録せず、識別子もHMAC化して照会できる', async () => {
+  const bot = app(); const output: unknown[] = []; const saved: unknown[][] = [];
+  const logger = mock.method(console, 'error', (...args: unknown[]) => { output.push(args); });
+  const snapshot0 = structuredClone(snapshot); snapshot0.config.policy.retentionDays = 0;
+  bot.store.settings = async () => snapshot0;
+  bot.store.saveDiagnostic = async (...args) => { saved.push(args); };
+  bot.command = async () => { throw Object.assign(new Error('非公開の本文 300000000000000123'), { code: '23505' }); };
+  bot.respond = async () => {};
+  const request = interaction({ id: 'private-operation', guildId: 'private-guild', channelId: 'private-channel', commandName: 'post', isRepliable: () => true, isChatInputCommand: () => true, isCommand: () => true });
+  try {
+    await bot.handle(request as never);
+    bot.store.settings = async () => { throw new Error('設定取得不能'); };
+    await bot.handle(request as never);
+    assert.equal(saved.length, 2);
+    for (const args of saved) {
+      assert.equal(args[6], true);
+      for (const value of args.slice(1, 4)) assert.match(value as string, /^[a-f0-9]{64}$/);
+      assert.ok(String(args[5]).includes('code=23505'));
+    }
+    for (const secret of ['非公開の本文', '300000000000000123', 'private-operation', 'private-guild', 'private-channel']) {
+      assert.ok(!JSON.stringify(saved).includes(secret)); assert.ok(!JSON.stringify(output).includes(secret));
+    }
+    bot.store.settings = async () => snapshot0;
+    bot.store.diagnostic = async (code, scope) => scope === saved[0]![1] ? { code, action: 'post', details: String(saved[0]![5]), created_at: new Date() } : null;
+    let shown = '';
+    bot.respond = async (_interaction, components) => { shown = JSON.stringify(components); };
+    await App.prototype.command.call(bot, interaction({ guildId: 'private-guild', commandName: 'error', memberPermissions: new PermissionsBitField(PermissionFlagsBits.ManageGuild), deferReply: async () => {}, options: { getString: () => saved[0]![0] } }) as never);
+    assert.ok(shown.includes('23505'));
+  } finally { logger.mock.restore(); }
 });
 
 test('権限や取得失敗の案内からも報告でき、投稿内容や内部エラーはURLへ含めない', async () => {
