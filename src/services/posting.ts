@@ -13,6 +13,7 @@ import { deliveryError } from './delivery-error.js';
 import { checkMediaSafety } from '../media/safety-policy.js';
 import { SafeHttp, MAX_DOWNLOAD_BYTES } from '../media/http.js';
 import { isBotAdmin } from '../domain/permissions.js';
+import { stripXSharingParameters } from '../domain/urls.js';
 
 export class Posting {
   private queue = new SerialQueue(Number.POSITIVE_INFINITY);
@@ -31,15 +32,17 @@ export class Posting {
   async preflight(input: Pick<PostInput, 'guildId' | 'channelId' | 'userId' | 'operationId' | 'text'>, config?: Config, consume = false): Promise<void> {
     if (isBotAdmin(input.userId)) return;
     config ??= (await this.store.settings(input.guildId, input.channelId, true)).config;
-    const body = input.text.normalize('NFKC').trim();
+    const text = stripXSharingParameters(input.text);
+    const body = text.normalize('NFKC').trim();
     await this.store.checkFlood(this.secrets.fingerprint('user', input.guildId, input.userId), {
-      chars: [...input.text].length,
+      chars: [...text].length,
       hash: body ? this.secrets.fingerprint('body', input.guildId, input.userId, body) : '',
       operationId: this.secrets.fingerprint('operation', input.operationId),
       channelId: this.secrets.fingerprint('channel', input.guildId, input.channelId),
     }, config.policy, consume);
   }
   async publish(input: PostInput): Promise<string> {
+    input = { ...input, text: stripXSharingParameters(input.text), source: input.source ? stripXSharingParameters(input.source) : input.source };
     return this.queue.run(`${input.guildId}:${input.channelId}`, input.media.reduce((sum, file) => sum + file.data.length, 0), () => this.publishLocked(input));
   }
   private async publishLocked(input: PostInput): Promise<string> {
@@ -144,6 +147,7 @@ export class Posting {
     return post;
   }
   async edit(guildId: string, channelId: string, messageId: string, userId: string, content: string): Promise<void> {
+    content = stripXSharingParameters(content);
     const post = await this.own(guildId, channelId, messageId, userId);
     const settings = await this.store.settings(guildId, channelId, true);
     this.validateEdit(post, content, settings.config);

@@ -277,3 +277,21 @@ test('保存あり・なしの投稿をサーバー単位で合算し、同一�
   assert.equal((await store.pool.query('SELECT 1 FROM v2_sessions WHERE channel_id=$1', [targets[1]])).rowCount, 0);
   assert.equal((await store.pool.query('SELECT 1 FROM v2_authors WHERE operation_id=$1', [input.operationId])).rowCount, 0);
 });
+
+test('本文・出典のX共有パラメータは送信と保存の前に除去し、編集時も残さない', async () => {
+  const c = 'sharing-parameters-channel';
+  await store.saveSettings(await store.settings(guild, c), 'channel', { policy: { cooldown: 0 } }, user);
+  await store.setPanel(guild, c, 'sharing-panel', (await store.settings(guild, channel)).webhook!);
+  const base = 'https://x.com/example/status/123';
+  const link = await posting.publish({ ...post('sharing-parameters'), channelId: c, text: `本文 ${base}?a=private&s=20`, source: `${base}?s=20&a=private` });
+  const id = link.split('/').at(-1)!;
+  assert.equal((sent.at(-1) as { content: string }).content, `本文 ${base}\n出典: <${base}>`);
+  const saved = await store.post(guild, c, id);
+  assert.equal(saved?.content, `本文 ${base}`);
+  assert.equal(saved?.source, base);
+  await posting.edit(guild, c, id, user, `編集 [リンク](${base}?a=another&s=20)`);
+  assert.equal((edited.at(-1) as { content: string }).content, `編集 [リンク](${base})\n出典: <${base}>`);
+  assert.equal((await store.post(guild, c, id))?.content, `編集 [リンク](${base})`);
+  await store.deletePost(guild, c, id);
+  sent.pop(); edited.pop();
+});
