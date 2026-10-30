@@ -90,7 +90,7 @@ for (let index = 1; index <= 4; index++) {
     await assert.rejects(new MediaService().optimize(data, defaults), /NSFW/);
     const allowed = { ...defaults, content: { ...defaults.content, allowNsfw: true } };
     const optimized = await new MediaService().optimize(data, allowed);
-    assert.equal(optimized.safety?.nsfw, true);
+    assert.equal(optimized.safety?.checkedNsfw, false);
     await assert.rejects(checkMediaSafety(optimized.data, defaults, optimized.name, '', optimized.safety), /NSFW/);
     await checkMediaSafety(optimized.data, allowed, optimized.name, '', optimized.safety);
   });

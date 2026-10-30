@@ -1,6 +1,8 @@
 import { test, before, after, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { PGlite } from '@electric-sql/pglite';
 import { PGLiteSocketServer } from '@electric-sql/pglite-socket';
 import { DiscordAPIError, MessageFlags, WebhookClient, ChannelType, Collection, type TextChannel } from 'discord.js';
@@ -11,6 +13,8 @@ import { Posting } from '../src/services/posting.js';
 import { defaults } from '../src/domain/config.js';
 import type { PostInput } from '../src/domain/validation.js';
 import { BlockedWordError } from '../src/domain/errors.js';
+import { MediaService } from '../src/media/service.js';
+import { SafeHttp } from '../src/media/http.js';
 
 let db: PGlite; let server: PGLiteSocketServer; let store: Store; let posting: Posting; let secrets: SecretBox;
 const guild = '100000000000000010'; const channel = '200000000000000010'; const user = '300000000000000010';
@@ -293,5 +297,43 @@ test('本文・出典のX共有パラメータは送信と保存の前に除去�
   assert.equal((edited.at(-1) as { content: string }).content, `編集 [リンク](${base})\n出典: <${base}>`);
   assert.equal((await store.post(guild, c, id))?.content, `編集 [リンク](${base})`);
   await store.deletePost(guild, c, id);
-  sent.pop(); edited.pop();
+});
+
+test('X動画だけのURL投稿は画像必須でも送信・保存・説明文の空編集ができ、安全判定も設定に従う', async () => {
+  const c = 'url-video-channel';
+  await store.saveSettings(await store.settings(guild, c), 'channel', {
+    policy: { cooldown: 0 }, content: { text: false, caption: false, allowNsfw: true, allowNsfl: false },
+  }, user);
+  await store.setPanel(guild, c, 'video-panel', (await store.settings(guild, channel)).webhook!);
+  class XHttp extends SafeHttp {
+    override async json<T>(): Promise<T> {
+      return { tweet: { media: { all: [{ type: 'video', url: 'https://video.twimg.com/test.mp4' }] } } } as T;
+    }
+  }
+  const result = await new MediaService(new XHttp()).fromUrl('https://x.com/example/status/123?a=private&s=20', defaults);
+  assert.equal(result.files.length, 0);
+  assert.deepEqual(result.videoLinks, ['https://x-p.yexe.xyz/test.mp4']);
+  const video = await promisify(execFile)(process.env.FFMPEG_PATH ?? 'ffmpeg', [
+    '-v', 'error', '-f', 'lavfi', '-i', 'color=c=white:s=64x64:r=1', '-t', '1', '-threads', '1',
+    '-pix_fmt', 'yuv420p', '-movflags', 'frag_keyframe+empty_moov', '-f', 'mp4', 'pipe:1',
+  ], { encoding: 'buffer', timeout: 15_000 });
+  const get = mock.method(SafeHttp.prototype, 'get', async (url: string) => {
+    assert.equal(url, result.videoLinks[0]);
+    return { data: video.stdout, contentType: 'video/mp4', url };
+  });
+  try {
+    const videoPost = { ...post('url-video-only'), channelId: c, text: '', media: result.files, source: result.source, videoLinks: result.videoLinks };
+    const link = await posting.publish(videoPost);
+    const id = link.split('/').at(-1)!;
+    assert.equal(get.mock.calls.length, 1);
+    assert.ok((sent.at(-1) as { content: string }).content.includes('[動画](https://x-p.yexe.xyz/test.mp4)'));
+    assert.deepEqual((await store.post(guild, c, id))?.videoLinks, result.videoLinks);
+    await posting.edit(guild, c, id, user, '');
+    assert.ok((edited.at(-1) as { content: string }).content.includes('[動画]'));
+    await store.saveSettings(await store.settings(guild, c, true), 'channel', {
+      policy: { cooldown: 0 }, content: { text: false, caption: false, allowNsfw: true, allowNsfl: true },
+    }, user);
+    await posting.publish({ ...videoPost, operationId: 'url-video-unrestricted' });
+    assert.equal(get.mock.calls.length, 1);
+  } finally { get.mock.restore(); }
 });

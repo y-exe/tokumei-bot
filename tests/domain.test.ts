@@ -39,6 +39,18 @@ test('Discord上限を超える添付は拒否し、アニメーションや動�
   assert.doesNotThrow(() => validatePost({ ...input, media: [{ ...image, kind: 'animation' }, { ...image, kind: 'video' }, { ...image, kind: 'file' }] }, defaults));
   assert.throws(() => validateText('a'.repeat(1801), defaults), /1800/);
 });
+
+test('URL動画だけでもメディア投稿として扱い、説明文・テキスト専用・件数の制限を守る', () => {
+  const video = { ...input, text: '', videoLinks: ['https://x-p.yexe.xyz/example.mp4'], source: 'https://x.com/example/status/123' };
+  assert.doesNotThrow(() => validatePost(video, defaults));
+  const imageOnly = resolveConfig(defaults, presetOverrides('image'));
+  assert.doesNotThrow(() => validatePost(video, imageOnly));
+  const noCaption = resolveConfig(defaults, { content: { caption: false } });
+  assert.throws(() => validatePost({ ...video, text: '説明' }, noCaption), /説明文/);
+  const textOnly = resolveConfig(defaults, { content: { images: false, urls: false } });
+  assert.throws(() => validatePost(video, textOnly), /テキスト専用/);
+  assert.throws(() => validatePost({ ...video, media: Array(10).fill(image) }, defaults), /10個/);
+});
 test('設定は深い継承、厳密なインポート、秘密情報排除を行う', () => {
   const value = { panel: { title: '画像置き場' }, policy: { cooldown: 10 } };
   const config = resolveConfig(defaults, value);

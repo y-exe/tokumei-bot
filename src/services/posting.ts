@@ -51,7 +51,7 @@ export class Posting {
     validatePost(input, settings.config);
     await this.preflight(input, settings.config);
     for (const file of input.media) await checkMediaSafety(file.data, settings.config, file.name, '', file.safety);
-    for (const url of input.videoLinks ?? []) {
+    for (const url of settings.config.content.allowNsfw && settings.config.content.allowNsfl ? [] : input.videoLinks ?? []) {
       const response = await new SafeHttp().get(url, MAX_DOWNLOAD_BYTES);
       await checkMediaSafety(response.data, settings.config, 'video.mp4', 'video/mp4');
     }
@@ -171,9 +171,10 @@ export class Posting {
   validateEdit(post: StoredPost, content: string, config: Config): void {
     validateText(content, config, post.layout === 'legacy' ? 2000 : 1800);
     if (post.source) validateText(post.source, config, 1800, 'source');
-    if (!content.trim() && !post.media.length) throw new UserError('本文を空にすることはできません。投稿を削除してください。');
-    if (!config.content.text && !post.media.length) throw new UserError('このチャンネルは画像必須です。');
-    if (post.media.length && !config.content.caption && content.trim()) throw new UserError('このチャンネルでは説明文を付けられません。');
+    const hasMedia = post.media.length > 0 || !!post.videoLinks?.length;
+    if (!content.trim() && !hasMedia) throw new UserError('本文を空にすることはできません。投稿を削除してください。');
+    if (!config.content.text && !hasMedia) throw new UserError('このチャンネルは画像必須です。');
+    if (hasMedia && !config.content.caption && content.trim()) throw new UserError('このチャンネルでは説明文を付けられません。');
   }
   async remove(guildId: string, channelId: string, messageId: string, userId?: string): Promise<void> {
     const post = userId ? await this.own(guildId, channelId, messageId, userId) : await this.store.post(guildId, channelId, messageId);

@@ -3,7 +3,7 @@ import { UserError, BlockedWordError } from './errors.js';
 import { matchingBlockedWords } from './blocked-words.js';
 import { isBotAdmin } from './permissions.js';
 
-export interface MediaFile { data: Buffer; name: string; kind: 'image' | 'animation' | 'video' | 'file'; safety?: { nsfw: boolean; nsfl: boolean; sha256: string; version: string }; }
+export interface MediaFile { data: Buffer; name: string; kind: 'image' | 'animation' | 'video' | 'file'; safety?: { nsfw: boolean; nsfl: boolean; checkedNsfw?: boolean; checkedNsfl?: boolean; sha256: string; version: string }; }
 export interface PostInput {
   guildId: string; channelId: string; userId: string; roles: string[]; operationId: string;
   text: string; media: MediaFile[]; source?: string; replyTo?: string; videoLinks?: string[];
@@ -28,12 +28,13 @@ export function validatePost(input: PostInput, config: Config): void {
   if (input.source) validateText(input.source, config, 1800, 'source');
   if (!isBotAdmin(input.userId) && config.policy.allowedRoles.length && !input.roles.some(role => config.policy.allowedRoles.includes(role)))
     throw new UserError('このチャンネルに匿名投稿できるロールを持っていません。');
-  if (!input.text.trim() && !input.media.length) throw new UserError('本文か画像を入力してください。');
-  if (!config.content.text && !input.media.length) throw new UserError('このチャンネルでは画像の添付が必要です。');
-  if (input.media.length && !config.content.images) throw new UserError('このチャンネルはテキスト専用です。');
-  if (input.media.length && input.text.trim() && !config.content.caption) throw new UserError('このチャンネルでは画像に説明文を付けられません。');
+  const hasMedia = input.media.length > 0 || !!input.videoLinks?.length;
+  if (!input.text.trim() && !hasMedia) throw new UserError('本文か画像を入力してください。');
+  if (!config.content.text && !hasMedia) throw new UserError('このチャンネルでは画像の添付が必要です。');
+  if (hasMedia && !config.content.images) throw new UserError('このチャンネルはテキスト専用です。');
+  if (hasMedia && input.text.trim() && !config.content.caption) throw new UserError('このチャンネルでは画像に説明文を付けられません。');
   if (input.source && !config.content.urls) throw new UserError('このチャンネルではURL変換を利用できません。画像を直接添付してください。');
-  if (input.media.length > 10) throw new UserError('Discordの上限により、1回に添付できるファイルは10個までです。');
+  if (input.media.length + (input.videoLinks?.length ?? 0) > 10) throw new UserError('Discordの上限により、1回に添付できるファイルは10個までです。');
 }
 
 export function postContent(text: string, source?: string, replyTo?: string, guildId?: string, channelId?: string, replyNumber?: number, videoLinks?: string[]): string {

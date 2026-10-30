@@ -14,11 +14,12 @@ import { hasAnimeExposure, ANIME_INPUT_SIZE } from './anime-nudity.js';
 
 const queue = new WorkQueue(1, 10);
 const frameQueue = new WorkQueue(1, 10);
-const detectorVersion = 'nudenet320-anime-s1216-crop8-0.6-v2';
-export type ImageSafetyFacts = { nsfw: boolean; nsfl: boolean };
+const detectorVersion = 'nudenet320-anime-s1216-crop8-0.6-v3';
+export type ImageSafetyFacts = { nsfw: boolean; nsfl: boolean; checkedNsfw?: boolean; checkedNsfl?: boolean };
 export type ImageSafetyCertificate = ImageSafetyFacts & { sha256: string; version: string };
 export function certifyImage(data: Buffer, facts: ImageSafetyFacts): ImageSafetyCertificate {
-  return { ...facts, sha256: createHash('sha256').update(data).digest('hex'), version: detectorVersion };
+  return { ...facts, checkedNsfw: facts.checkedNsfw ?? true, checkedNsfl: facts.checkedNsfl ?? true,
+    sha256: createHash('sha256').update(data).digest('hex'), version: detectorVersion };
 }
 export function enforceImageSafety(facts: ImageSafetyFacts, config: Config): void {
   if (facts.nsfl) enforceSafety({ label: 'NSFL', sfw: 0, nsfw: 0, nsfl: 1 }, config);
@@ -29,20 +30,27 @@ export function enforceSafety(result: SafetyResult, config: Config): void {
     throw new MediaSafetyError(`このチャンネルでは${result.label === 'NSFW' ? '性的な画像・動画（NSFW）' : 'グロ・流血画像・動画（NSFL）'}を投稿できません。\n\n${result.label === 'NSFW' ? '性的な画像でない場合は管理者にお問い合わせください\nNSFW検知モデルの改善等致します' : 'グロ・流血画像でない場合は管理者にお問い合わせください\nNSFL検知モデルの改善等致します'}`);
 }
 
-export async function analyzeImageSafety(data: Buffer): Promise<ImageSafetyFacts> {
+export async function analyzeImageSafety(data: Buffer, config?: Config): Promise<ImageSafetyFacts> {
+  const checkedNsfw = !config?.content.allowNsfw;
+  const checkedNsfl = !config?.content.allowNsfl;
+  if (!checkedNsfw && !checkedNsfl) return { nsfw: false, nsfl: false, checkedNsfw, checkedNsfl };
   return frameQueue.run(async () => {
-    const result = await classifyImage(data);
-    const nsfw = exposesRestrictedParts(await detectBodyParts(data)) || await hasAnimeExposure(data);
-    return { nsfw, nsfl: result.label === 'NSFL' };
+    const nsfl = checkedNsfl && (await classifyImage(data)).label === 'NSFL';
+    const nsfw = checkedNsfw && (exposesRestrictedParts(await detectBodyParts(data)) || await hasAnimeExposure(data));
+    return { nsfw, nsfl, checkedNsfw, checkedNsfl };
   });
 }
 async function checkFrame(data: Buffer, config: Config): Promise<void> {
-  enforceImageSafety(await analyzeImageSafety(data), config);
+  enforceImageSafety(await analyzeImageSafety(data, config), config);
 }
 
 export async function checkMediaSafety(data: Buffer, config: Config, name = '', contentType = '', certificate?: ImageSafetyCertificate): Promise<void> {
+  if (config.content.allowNsfw && config.content.allowNsfl) return;
   return queue.run(async () => {
-    if (certificate?.version === detectorVersion && certificate.sha256 === createHash('sha256').update(data).digest('hex')) {
+    if (certificate?.version === detectorVersion &&
+        (config.content.allowNsfw || certificate.checkedNsfw === true) &&
+        (config.content.allowNsfl || certificate.checkedNsfl === true) &&
+        certificate.sha256 === createHash('sha256').update(data).digest('hex')) {
       enforceImageSafety(certificate, config); return;
     }
     let metadata: Metadata | undefined;
