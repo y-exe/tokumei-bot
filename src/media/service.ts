@@ -23,6 +23,13 @@ export const videoProxyUrl = (url: string): string => {
   try { const target = new URL(url); return `https://x-p.yexe.xyz${target.pathname}${target.search}`; }
   catch { return url; }
 };
+export const videoSourceUrl = (url: string): string => {
+  try {
+    const target = new URL(url);
+    return target.protocol === 'https:' && target.hostname === 'x-p.yexe.xyz' && !target.username && !target.password && !target.port ?
+      `https://video.twimg.com${target.pathname}${target.search}` : url;
+  } catch { return url; }
+};
 const isTwimgVideo = (url: string): boolean => /^https:\/\/video\.twimg\.com\//.test(url);
 const webUrl = z.string().url();
 const xResponse = z.object({ tweet: z.object({

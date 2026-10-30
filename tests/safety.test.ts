@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, access, mkdtemp, rm } from 'node:fs/promises';
+import { readFile, access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
@@ -9,6 +9,7 @@ import sharp from 'sharp';
 import { classifyImage, initializeSafety, type SafetyLabel } from '../src/media/safety.js';
 import { analyzeImageSafety, certifyImage, checkMediaSafety, enforceSafety } from '../src/media/safety-policy.js';
 import { defaults, resolveConfig } from '../src/domain/config.js';
+import { extractVideoFrame, videoDuration, videoSampleTimes, VideoDecodeError } from '../src/media/video-frames.js';
 
 test('安全設定は既存設定でも拒否が初期値でカテゴリごとに許可できる', () => {
   const nsfw = { sfw: 0, nsfw: 1, nsfl: 0, label: 'NSFW' as const };
@@ -61,12 +62,15 @@ test('実ONNXのSingleton・RGB画像形式・確率を検証する', async () =
   }
 });
 
-test('動画をFFmpegで抽出し5秒ごとのフレームを実ONNXで検査する', async () => {
+test('動画とGIFから分散抽出したフレームを実ONNXで検査する', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'safety-video-test-'));
   try {
     const path = join(directory, 'safe.mp4');
     await promisify(execFile)(process.env.FFMPEG_PATH ?? 'ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=white:s=64x64:r=1', '-t', '6', '-threads', '1', '-pix_fmt', 'yuv420p', path], { timeout: 15_000 });
     await checkMediaSafety(await readFile(path), resolveConfig(defaults, { content: { allowNsfw: true } }), 'safe.mp4');
+    const gif = join(directory, 'safe.gif');
+    await promisify(execFile)(process.env.FFMPEG_PATH ?? 'ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=white:s=32x32:r=1', '-t', '6', '-threads', '1', gif]);
+    await checkMediaSafety(await readFile(gif), resolveConfig(defaults, { content: { allowNsfw: true } }), 'safe.gif');
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -80,3 +84,64 @@ for (const [file, expected] of [['sfw.jpg', 'SFW'], ['nsfw-real.jpg', 'NSFW'], [
     assert.equal(result.label, expected);
   });
 }
+
+test('動画長に応じて1〜3コマを先頭から終盤へ分散し、長い動画でも件数を増やさない', () => {
+  for (const [seconds, count] of [[1, 1], [5, 1], [6, 2], [30, 2], [31, 2], [120, 2], [121, 3], [600, 3], [3600, 3]]) {
+    const times = videoSampleTimes(seconds!);
+    assert.equal(times.length, count);
+    assert.equal(times[0], 0);
+    assert.ok(times.every(time => time >= 0 && time < seconds!));
+    assert.ok(times.every((time, index) => !index || time > times[index - 1]!));
+    if (count! > 1) assert.ok(times.at(-1)! >= seconds! * 0.8);
+  }
+  for (const invalid of [0, -1, NaN, Infinity]) assert.throws(() => videoSampleTimes(invalid), VideoDecodeError);
+});
+
+test('10分を超える動画も全体をデコードせず指定位置を取り出し、縦横比を維持する', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'video-frames-test-'));
+  try {
+    const path = join(directory, 'long.mp4');
+    await promisify(execFile)(process.env.FFMPEG_PATH ?? 'ffmpeg', [
+      '-v', 'error', '-f', 'lavfi', '-i', 'color=c=white:s=64x32:r=1', '-t', '610',
+      '-threads', '1', '-pix_fmt', 'yuv420p', path,
+    ]);
+    const duration = await videoDuration(path);
+    assert.ok(duration >= 610);
+    const times = videoSampleTimes(duration);
+    assert.equal(times.length, 3);
+    for (const seconds of [times[0]!, times.at(-1)!]) {
+      const frame = await extractVideoFrame(path, seconds, 128);
+      const metadata = await sharp(frame).metadata();
+      assert.equal(metadata.width, 128);
+      assert.equal(metadata.height, 64);
+    }
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('長さ情報のないWebMでも映像パケットから長さを確認できる', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'video-webm-test-'));
+  try {
+    const video = await promisify(execFile)(process.env.FFMPEG_PATH ?? 'ffmpeg', [
+      '-v', 'error', '-f', 'lavfi', '-i', 'color=c=white:s=64x64:r=5', '-t', '2',
+      '-threads', '1', '-c:v', 'libvpx', '-f', 'webm', 'pipe:1',
+    ], { encoding: 'buffer' });
+    const path = join(directory, 'stream.webm');
+    await writeFile(path, video.stdout);
+    const duration = await videoDuration(path);
+    assert.ok(duration >= 1.8 && duration <= 2.2);
+    assert.ok((await extractVideoFrame(path, 1, 64)).length > 0);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('壊れた動画と映像のないファイルは診断可能なエラーとして拒否する', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'video-broken-test-'));
+  try {
+    const path = join(directory, 'broken.mp4');
+    await writeFile(path, 'broken');
+    await assert.rejects(videoDuration(path), error => error instanceof VideoDecodeError && error.stage === 'probe');
+    await assert.rejects(extractVideoFrame(path, 0, 64), error => error instanceof VideoDecodeError && error.stage === 'frame');
+    const audio = join(directory, 'audio.wav');
+    await promisify(execFile)(process.env.FFMPEG_PATH ?? 'ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'anullsrc', '-t', '1', audio]);
+    await assert.rejects(videoDuration(audio), error => error instanceof VideoDecodeError && error.reason === 'no_video_stream');
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});

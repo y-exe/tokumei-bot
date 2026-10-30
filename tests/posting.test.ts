@@ -318,7 +318,7 @@ test('X動画だけのURL投稿は画像必須でも送信・保存・説明文�
     '-pix_fmt', 'yuv420p', '-movflags', 'frag_keyframe+empty_moov', '-f', 'mp4', 'pipe:1',
   ], { encoding: 'buffer', timeout: 15_000 });
   const get = mock.method(SafeHttp.prototype, 'get', async (url: string) => {
-    assert.equal(url, result.videoLinks[0]);
+    assert.equal(url, 'https://video.twimg.com/test.mp4');
     return { data: video.stdout, contentType: 'video/mp4', url };
   });
   try {
@@ -336,4 +336,57 @@ test('X動画だけのURL投稿は画像必須でも送信・保存・説明文�
     await posting.publish({ ...videoPost, operationId: 'url-video-unrestricted' });
     assert.equal(get.mock.calls.length, 1);
   } finally { get.mock.restore(); }
+});
+
+test('X以外の対応サイト・直接URL・動画添付も実MP4を分散検査して送信できる', async () => {
+  const c = 'other-video-channel';
+  await store.saveSettings(await store.settings(guild, c), 'channel', {
+    policy: { cooldown: 0 }, content: { text: false, allowNsfw: true, allowNsfl: false },
+  }, user);
+  await store.setPanel(guild, c, 'other-video-panel', (await store.settings(guild, channel)).webhook!);
+  const video = await promisify(execFile)(process.env.FFMPEG_PATH ?? 'ffmpeg', [
+    '-v', 'error', '-f', 'lavfi', '-i', 'color=c=white:s=64x64:r=1', '-t', '6', '-threads', '1',
+    '-pix_fmt', 'yuv420p', '-movflags', 'frag_keyframe+empty_moov', '-f', 'mp4', 'pipe:1',
+  ], { encoding: 'buffer' });
+  let broken = false;
+  const downloads: string[] = [];
+  class VideoHttp extends SafeHttp {
+    override async json<T>(url: string): Promise<T> {
+      if (url.includes('/api/v1/statuses/')) return { visibility: 'public', media_attachments: [{ type: 'video', url: 'https://mastodon.example/clip.mp4' }] } as T;
+      assert.ok(url.startsWith('https://api.atmosphere.tools/2/'));
+      return { status: { media: { all: [{ type: 'video', url: 'https://api.atmosphere.tools/proxy?url=clip.mp4' }] } } } as T;
+    }
+    override async postJson<T>(): Promise<T> {
+      return { visibility: 'public', files: [{ type: 'video/mp4', url: 'https://misskey.example/clip.mp4' }] } as T;
+    }
+    override async get(url: string) {
+      downloads.push(url);
+      return { data: broken ? Buffer.from('broken') : video.stdout, contentType: 'video/mp4', url };
+    }
+  }
+  const service = new MediaService(new VideoHttp());
+  const config = (await store.settings(guild, c, true)).config;
+  const urls = [
+    'https://www.tiktok.com/@example/video/123', 'https://www.instagram.com/reel/abc/',
+    'https://www.threads.net/@example/post/abc', 'https://mastodon.example/@example/123',
+    'https://misskey.example/notes/abc123', 'https://cdn.example/clip.mp4',
+  ];
+  for (const [index, url] of urls.entries()) {
+    const result = await service.fromUrl(url, config);
+    assert.equal(result.files.length, 1, url);
+    assert.equal(result.files[0]!.kind, 'video', url);
+    assert.equal(result.videoLinks.length, 0, url);
+    await posting.publish({ ...post(`other-video-${index}`), channelId: c, text: '', media: result.files, source: result.source });
+    assert.equal((sent.at(-1) as { files: unknown[] }).files.length, 1, url);
+  }
+  const files = await service.attachments(['https://cdn.discordapp.com/attachments/1/2/clip.mp4'], config);
+  await posting.publish({ ...post('other-video-attachment'), channelId: c, text: '', media: files });
+  assert.equal((sent.at(-1) as { files: unknown[] }).files.length, 1);
+  assert.equal(downloads.length, 7);
+  assert.ok(downloads.every(url => !url.includes('x-p.yexe.xyz')));
+  broken = true;
+  const invalid = await service.fromUrl(urls[0]!, config);
+  const before = sent.length;
+  await assert.rejects(posting.publish({ ...post('other-video-broken'), channelId: c, text: '', media: invalid.files }), /安全判定/);
+  assert.equal(sent.length, before);
 });

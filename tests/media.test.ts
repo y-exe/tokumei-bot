@@ -7,9 +7,15 @@ import assert from 'node:assert/strict';
 import sharp from 'sharp';
 import { defaults } from '../src/domain/config.js';
 import { isPublicAddress, SafeHttp, WorkQueue, MAX_DOWNLOAD_BYTES } from '../src/media/http.js';
-import { MediaService } from '../src/media/service.js';
+import { MediaService, videoSourceUrl } from '../src/media/service.js';
 import { UserError } from '../src/domain/errors.js';
 import { randomBytes } from 'node:crypto';
+
+test('X動画の安全判定はHTMLプレイヤーではなく元のMP4を取得する', () => {
+  assert.equal(videoSourceUrl('https://x-p.yexe.xyz/amplify_video/123/vid/clip.mp4?tag=12'), 'https://video.twimg.com/amplify_video/123/vid/clip.mp4?tag=12');
+  for (const url of ['https://video.twimg.com/a.mp4', 'https://example.com/a.mp4', 'https://x-p.yexe.xyz.evil.example/a.mp4', 'https://user@x-p.yexe.xyz/a.mp4', 'http://x-p.yexe.xyz/a.mp4'])
+    assert.equal(videoSourceUrl(url), url);
+});
 
 test('公開URLのDNS検索は絶対名を使い、検索ドメインを付けず内部IPの混在を拒否する', async () => {
   const names: string[] = [];

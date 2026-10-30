@@ -12,6 +12,7 @@ import {isRequestMode} from '../domain/config.js';
 import { deliveryError } from './delivery-error.js';
 import { checkMediaSafety } from '../media/safety-policy.js';
 import { SafeHttp, MAX_DOWNLOAD_BYTES } from '../media/http.js';
+import { videoSourceUrl } from '../media/service.js';
 import { isBotAdmin } from '../domain/permissions.js';
 import { stripXSharingParameters } from '../domain/urls.js';
 
@@ -52,7 +53,7 @@ export class Posting {
     await this.preflight(input, settings.config);
     for (const file of input.media) await checkMediaSafety(file.data, settings.config, file.name, '', file.safety);
     for (const url of settings.config.content.allowNsfw && settings.config.content.allowNsfl ? [] : input.videoLinks ?? []) {
-      const response = await new SafeHttp().get(url, MAX_DOWNLOAD_BYTES);
+      const response = await new SafeHttp().get(videoSourceUrl(url), MAX_DOWNLOAD_BYTES);
       await checkMediaSafety(response.data, settings.config, 'video.mp4', 'video/mp4');
     }
     const reply=input.replyTo?await this.store.post(input.guildId,input.channelId,input.replyTo):null;
