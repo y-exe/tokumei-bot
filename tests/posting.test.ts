@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import sharp from 'sharp';
 import { PGlite } from '@electric-sql/pglite';
 import { PGLiteSocketServer } from '@electric-sql/pglite-socket';
 import { DiscordAPIError, MessageFlags, WebhookClient, ChannelType, Collection, type TextChannel } from 'discord.js';
@@ -15,6 +16,7 @@ import type { PostInput } from '../src/domain/validation.js';
 import { BlockedWordError } from '../src/domain/errors.js';
 import { MediaService } from '../src/media/service.js';
 import { SafeHttp } from '../src/media/http.js';
+import { certifyImage } from '../src/media/safety-policy.js';
 
 let db: PGlite; let server: PGLiteSocketServer; let store: Store; let posting: Posting; let secrets: SecretBox;
 const guild = '100000000000000010'; const channel = '200000000000000010'; const user = '300000000000000010';
@@ -388,5 +390,23 @@ test('X以外の対応サイト・直接URL・動画添付も実MP4を分散検�
   const invalid = await service.fromUrl(urls[0]!, config);
   const before = sent.length;
   await assert.rejects(posting.publish({ ...post('other-video-broken'), channelId: c, text: '', media: invalid.files }), /安全判定/);
+  assert.equal(sent.length, before);
+});
+
+
+test('許可から拒否への設定変更後は送信処理でも保持した元画像を再検査する', async () => {
+  const c = 'original-safety-channel';
+  await store.saveSettings(await store.settings(guild, c), 'channel', {
+    policy: { cooldown: 0 }, content: { allowNsfw: true, allowNsfl: false },
+  }, user);
+  await store.setPanel(guild, c, 'original-safety-panel', (await store.settings(guild, channel)).webhook!);
+  const data = await sharp({ create: { width: 32, height: 32, channels: 3, background: 'white' } }).png().toBuffer();
+  const original = Buffer.from('broken');
+  const safety = certifyImage(data, { nsfw: false, nsfl: false, checkedNsfw: false, checkedNsfl: true }, original);
+  const input: PostInput = { ...post('original-permissive'), channelId: c, text: '', media: [{ data, safetyInput: original, safety, name: 'image.png', kind: 'image' }] };
+  await posting.publish(input);
+  await store.saveSettings(await store.settings(guild, c, true), 'channel', { policy: { cooldown: 0 }, content: { allowNsfw: false, allowNsfl: false } }, user);
+  const before = sent.length;
+  await assert.rejects(posting.publish({ ...input, operationId: 'original-strict' }), /壊れ/);
   assert.equal(sent.length, before);
 });

@@ -28,6 +28,9 @@ test('添付とURLのファイル合計容量を制限し、容量超過は途�
     { url: 'https://example.com/one.bin', kind: 'video' }, { url: 'https://example.com/two.bin', kind: 'video' },
   ] });
   await assert.rejects(service.fromUrl('https://example.com/post', defaults), /合計容量/);
+  service.optimize = async data => ({ data: Buffer.from('small'), safetyInput: data, name: 'image.jpg', kind: 'image' });
+  await assert.rejects(service.attachments(['https://example.com/one.bin', 'https://example.com/two.bin'], defaults), /合計容量/);
+  await assert.rejects(service.fromUrl('https://example.com/post', defaults), /合計容量/);
 });
 
 test('公開URLのDNS検索は絶対名を使い、検索ドメインを付けず内部IPの混在を拒否する', async () => {

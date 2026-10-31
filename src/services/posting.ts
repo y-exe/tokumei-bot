@@ -3,7 +3,7 @@ import { isWebhookParentChannel, type PostingChannel, type WebhookParentChannel 
 import type { Store, StoredPost } from '../infra/store.js';
 import type { SecretBox } from '../infra/secrets.js';
 import { UserError } from '../domain/errors.js';
-import { postContent, validatePost, validateText, type PostInput } from '../domain/validation.js';
+import { mediaBytes, postContent, validatePost, validateText, type PostInput } from '../domain/validation.js';
 import { postCard } from '../ui/post.js';
 import type { Config } from '../domain/config.js';
 import { SerialQueue } from '../infra/serial.js';
@@ -44,14 +44,14 @@ export class Posting {
   }
   async publish(input: PostInput): Promise<string> {
     input = { ...input, text: stripXSharingParameters(input.text), source: input.source ? stripXSharingParameters(input.source) : input.source };
-    return this.queue.run(`${input.guildId}:${input.channelId}`, input.media.reduce((sum, file) => sum + file.data.length, 0), () => this.publishLocked(input));
+    return this.queue.run(`${input.guildId}:${input.channelId}`, input.media.reduce((sum, file) => sum + mediaBytes(file), 0), () => this.publishLocked(input));
   }
   private async publishLocked(input: PostInput): Promise<string> {
     const settings = await this.store.settings(input.guildId, input.channelId, true);
     if (!settings.enabled || !settings.webhook) throw new UserError('このチャンネルには匿名投稿が設置されていません。');
     validatePost(input, settings.config);
     await this.preflight(input, settings.config);
-    for (const file of input.media) await checkMediaSafety(file.data, settings.config, file.name, '', file.safety);
+    for (const file of input.media) await checkMediaSafety(file.data, settings.config, file.name, '', file.safety, file.safetyInput);
     for (const url of settings.config.content.allowNsfw && settings.config.content.allowNsfl ? [] : input.videoLinks ?? []) {
       const response = await new SafeHttp().get(videoSourceUrl(url), MAX_DOWNLOAD_BYTES);
       await checkMediaSafety(response.data, settings.config, 'video.mp4', 'video/mp4');

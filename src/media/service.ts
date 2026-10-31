@@ -4,7 +4,7 @@ import type { Config, Provider } from '../domain/config.js';
 import { providerNames } from '../domain/config.js';
 import { UserError, MediaSafetyError } from '../domain/errors.js';
 import { analyzeImageSafety, certifyImage, enforceImageSafety } from './safety-policy.js';
-import type { MediaFile } from '../domain/validation.js';
+import { mediaBytes, type MediaFile } from '../domain/validation.js';
 import { SafeHttp, WorkQueue, MAX_DOWNLOAD_BYTES } from './http.js';
 
 export interface MediaSource { url: string; kind: 'image' | 'animation' | 'video'; headers?: Record<string, string>; }
@@ -14,7 +14,7 @@ class MediaCapacityError extends UserError {
   constructor() { super('添付ファイルの合計容量が32MiBを超えています。ファイル数やサイズを減らしてください。'); }
 }
 const appendMedia = (files: MediaFile[], file: MediaFile): void => {
-  if (files.reduce((bytes, item) => bytes + item.data.length, file.data.length) > MAX_DOWNLOAD_BYTES) throw new MediaCapacityError();
+  if (files.reduce((bytes, item) => bytes + mediaBytes(item), mediaBytes(file)) > MAX_DOWNLOAD_BYTES) throw new MediaCapacityError();
   files.push(file);
 };
 const videoExtension: Record<string, string> = { 'video/mp4': '.mp4', 'video/webm': '.webm', 'video/quicktime': '.mov', 'audio/mpeg': '.mp3', 'application/pdf': '.pdf', 'text/plain': '.txt' };
@@ -81,7 +81,9 @@ export class MediaService {
         const png = await pipeline.png({ compressionLevel: 6 }).toBuffer();
         if (png.length < output.length) { output = png; extension = 'png'; }
       }
-      return { data: output, name: `image_${index + 1}.${extension}`, kind: animated ? 'animation' : 'image', safety: certifyImage(output, safety) };
+      const safetyInput = safety.checkedNsfw === false || safety.checkedNsfl === false ? data : undefined;
+      return { data: output, name: `image_${index + 1}.${extension}`, kind: animated ? 'animation' : 'image',
+        safetyInput, safety: certifyImage(output, safety, safetyInput) };
     } catch (error) {
       if (error instanceof UserError) throw error;
       return passthrough();

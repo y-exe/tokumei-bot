@@ -13,12 +13,13 @@ import { extractVideoFrame, videoDuration, videoSampleTimes, VideoDecodeError } 
 
 const queue = new WorkQueue(1, 10);
 const frameQueue = new WorkQueue(1, 10);
-const detectorVersion = 'nudenet320-anime-s1216-crop8-0.6-v3';
+const detectorVersion = 'nudenet320-anime-s1216-crop8-spatial-0.6-v4';
 export type ImageSafetyFacts = { nsfw: boolean; nsfl: boolean; checkedNsfw?: boolean; checkedNsfl?: boolean };
-export type ImageSafetyCertificate = ImageSafetyFacts & { sha256: string; version: string };
-export function certifyImage(data: Buffer, facts: ImageSafetyFacts): ImageSafetyCertificate {
+export type ImageSafetyCertificate = ImageSafetyFacts & { sha256: string; originalSha256?: string; version: string };
+export function certifyImage(data: Buffer, facts: ImageSafetyFacts, original?: Buffer): ImageSafetyCertificate {
   return { ...facts, checkedNsfw: facts.checkedNsfw ?? true, checkedNsfl: facts.checkedNsfl ?? true,
-    sha256: createHash('sha256').update(data).digest('hex'), version: detectorVersion };
+    sha256: createHash('sha256').update(data).digest('hex'),
+    ...(original ? { originalSha256: createHash('sha256').update(original).digest('hex') } : {}), version: detectorVersion };
 }
 export function enforceImageSafety(facts: ImageSafetyFacts, config: Config): void {
   if (facts.nsfl) enforceSafety({ label: 'NSFL', sfw: 0, nsfw: 0, nsfl: 1 }, config);
@@ -43,14 +44,20 @@ async function checkFrame(data: Buffer, config: Config): Promise<void> {
   enforceImageSafety(await analyzeImageSafety(data, config), config);
 }
 
-export async function checkMediaSafety(data: Buffer, config: Config, name = '', contentType = '', certificate?: ImageSafetyCertificate): Promise<void> {
+export async function checkMediaSafety(data: Buffer, config: Config, name = '', contentType = '', certificate?: ImageSafetyCertificate, original?: Buffer): Promise<void> {
   if (config.content.allowNsfw && config.content.allowNsfl) return;
   return queue.run(async () => {
+    const matchesOutput = !!certificate && certificate.sha256 === createHash('sha256').update(data).digest('hex');
     if (certificate?.version === detectorVersion &&
         (config.content.allowNsfw || certificate.checkedNsfw === true) &&
         (config.content.allowNsfl || certificate.checkedNsfl === true) &&
-        certificate.sha256 === createHash('sha256').update(data).digest('hex')) {
+        matchesOutput) {
       enforceImageSafety(certificate, config); return;
+    }
+    if (original) {
+      if (!matchesOutput || certificate?.originalSha256 !== createHash('sha256').update(original).digest('hex'))
+        throw new UserError('元画像の確認情報が一致しません。画像を選び直して投稿してください。');
+      data = original;
     }
     let metadata: Metadata | undefined;
     try { metadata = await sharp(data, { limitInputPixels: 40_000_000 }).metadata(); } catch {}

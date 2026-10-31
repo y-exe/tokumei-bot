@@ -3,7 +3,10 @@ import { UserError, BlockedWordError } from './errors.js';
 import { matchingBlockedWords } from './blocked-words.js';
 import { isBotAdmin } from './permissions.js';
 
-export interface MediaFile { data: Buffer; name: string; kind: 'image' | 'animation' | 'video' | 'file'; safety?: { nsfw: boolean; nsfl: boolean; checkedNsfw?: boolean; checkedNsfl?: boolean; sha256: string; version: string }; }
+export interface MediaFile { data: Buffer; name: string; kind: 'image' | 'animation' | 'video' | 'file'; safetyInput?: Buffer; safety?: { nsfw: boolean; nsfl: boolean; checkedNsfw?: boolean; checkedNsfl?: boolean; sha256: string; originalSha256?: string; version: string }; }
+export function mediaBytes(file: Pick<MediaFile, 'data' | 'safetyInput'>): number {
+  return file.data.length + (file.safetyInput && file.safetyInput !== file.data ? file.safetyInput.length : 0);
+}
 export interface PostInput {
   guildId: string; channelId: string; userId: string; roles: string[]; operationId: string;
   text: string; media: MediaFile[]; source?: string; replyTo?: string; videoLinks?: string[];

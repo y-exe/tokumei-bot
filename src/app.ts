@@ -9,7 +9,7 @@ import { isPostingChannel, type PostingChannel } from './domain/channels.js';
 import { defaults, exportTemplate, importTemplate, presetOverrides, resolveConfig, parseRetention, allowsDirectPosts,isRequestMode, type Config, type Preset } from './domain/config.js';
 import { UserError, MediaSafetyError, BlockedWordError, FloodControlError, errorMessage } from './domain/errors.js';
 import { maskBlockedWords } from './domain/blocked-words.js';
-import { validateText, type PostInput } from './domain/validation.js';
+import { mediaBytes, validateText, type PostInput } from './domain/validation.js';
 import type { Store, ReportNotice } from './infra/store.js';
 import type { SecretBox } from './infra/secrets.js';
 import type { MediaService } from './media/service.js';
@@ -213,7 +213,7 @@ export class App {
       const result = await this.media.fromUrl(url, settings.config);
       const session: PreviewSession = { owner: interaction.user.id, guildId: interaction.guildId!, channelId: interaction.channelId!,
         files: result.files, source: result.source, text: content, warnings: result.warnings, selected: result.files.map((_, index) => index), sending: false, videoLinks: result.videoLinks };
-      const id = this.previews.create(session, result.files.reduce((sum, file) => sum + file.data.length, 0));
+      const id = this.previews.create(session, result.files.reduce((sum, file) => sum + mediaBytes(file), 0));
       await interaction.editReply({ ...payload(previewView(id, session, settings.config.content.caption)), flags: MessageFlags.IsComponentsV2,
         files: session.files.map(file => new AttachmentBuilder(file.data, { name: file.name })) });
     });
@@ -222,7 +222,7 @@ export class App {
     try { await operation(); }
     catch (error) {
       if (!(error instanceof BlockedWordError) || error.scope !== 'body') throw error;
-      const bytes = Buffer.byteLength(content) + (action.kind === 'post' ? action.media.reduce((sum,file)=>sum+file.data.length,0) : 0);
+      const bytes = Buffer.byteLength(content) + (action.kind === 'post' ? action.media.reduce((sum,file)=>sum+mediaBytes(file),0) : 0);
       let id: string;
       try {
         id = this.textRecoveries.create({ owner: interaction.user.id, guildId: interaction.guildId!, channelId: interaction.channelId!,

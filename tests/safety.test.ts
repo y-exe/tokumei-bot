@@ -51,6 +51,17 @@ test('NSFWとNSFLを両方許可した場合は画像・動画の安全判定を
   await checkMediaSafety(broken, config, 'broken.mp4');
 });
 
+test('設定変更で追加検査が必要な画像は加工後ではなく結び付けた元画像で確認する', async () => {
+  const image = await sharp({ create: { width: 32, height: 32, channels: 3, background: 'white' } }).png().toBuffer();
+  const original = Buffer.from('broken');
+  const certificate = certifyImage(image, { nsfw: false, nsfl: false, checkedNsfw: false, checkedNsfl: true }, original);
+  const allowed = resolveConfig(defaults, { content: { allowNsfw: true } });
+  await checkMediaSafety(image, allowed, 'image.png', '', certificate, original);
+  await assert.rejects(checkMediaSafety(image, defaults, 'image.png', '', certificate, original), /壊れ/);
+  await assert.rejects(checkMediaSafety(image, defaults, 'image.png', '', certificate, Buffer.from('other')), /元画像/);
+  await assert.rejects(checkMediaSafety(image, defaults, 'image.png', '', { ...certificate, sha256: 'different' }, original), /元画像/);
+});
+
 test('実ONNXのSingleton・RGB画像形式・確率を検証する', async () => {
   assert.equal(initializeSafety(), initializeSafety());
   for (const format of ['png', 'jpeg', 'webp', 'gif'] as const) {

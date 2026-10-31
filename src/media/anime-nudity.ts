@@ -78,11 +78,20 @@ export async function confirmAnimeExposure(
     .flatten({ background: 'white' }).resize(ANIME_INPUT_SIZE, ANIME_INPUT_SIZE, { fit: 'fill', kernel: 'cubic' }).png().toBuffer();
   for (const detection of detections) {
     const [x, y, width, height] = detection.box;
-    const size = Math.min(ANIME_INPUT_SIZE, Math.max(160, Math.ceil(Math.max(width, height) * 8)));
+    const size = Math.min(Math.floor(ANIME_INPUT_SIZE * 0.8), Math.max(160, Math.ceil(Math.max(width, height) * 8)));
     const left = Math.max(0, Math.min(ANIME_INPUT_SIZE - size, Math.floor(x + width / 2 - size / 2)));
     const top = Math.max(0, Math.min(ANIME_INPUT_SIZE - size, Math.floor(y + height / 2 - size / 2)));
     const crop = await sharp(image).extract({ left, top, width: size, height: size }).png().toBuffer();
-    if ((await detect(crop)).some(result => result.label === detection.label)) return true;
+    if ((await detect(crop)).some(result => {
+      if (result.label !== detection.label) return false;
+      const scale = size / ANIME_INPUT_SIZE;
+      const [rx, ry, rw, rh] = result.box;
+      const mappedX = left + rx * scale; const mappedY = top + ry * scale;
+      const mappedWidth = rw * scale; const mappedHeight = rh * scale;
+      const intersection = Math.max(0, Math.min(x + width, mappedX + mappedWidth) - Math.max(x, mappedX)) *
+        Math.max(0, Math.min(y + height, mappedY + mappedHeight) - Math.max(y, mappedY));
+      return intersection / (width * height + mappedWidth * mappedHeight - intersection) >= 0.3;
+    })) return true;
   }
   return false;
 }
