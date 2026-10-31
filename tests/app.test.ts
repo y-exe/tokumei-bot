@@ -20,6 +20,11 @@ function interaction(overrides: Record<string, unknown> = {}) {
   return { guildId: 'g', channelId: 'c', user: { id: 'alice' }, member: { roles: [] }, memberPermissions: new PermissionsBitField(0n), isCommand:()=>false, ...overrides } as unknown as RepliableInteraction;
 }
 
+test('プレビューは全体のメモリ上限を超えるデータを保持しない', () => {
+  const bot = app();
+  assert.throws(() => bot.previews.create({ owner: 'alice', guildId: 'g', channelId: 'c', files: [], text: '', source: '', warnings: [], selected: [], sending: false, videoLinks: [] }, 64 * 1024 * 1024 + 1), /混み合って/);
+});
+
 test('/setupと案内の埋め込み編集は選択数上限が選択肢数以内の画面を返す', async () => {
   const bot = app(); const views: unknown[] = [];
   bot.respond = async (_interaction, components) => { views.push(components.map(component => component.toJSON())); };

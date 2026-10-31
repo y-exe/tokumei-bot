@@ -59,6 +59,11 @@ test('設定は深い継承、厳密なインポート、秘密情報排除を�
   assert.deepEqual(importTemplate(JSON.parse(exportTemplate(value)), defaults), value);
   assert.throws(() => importTemplate({ version: 1, settings: { webhook: 'secret' } }, defaults));
   assert.throws(() => importTemplate({ version: 1, settings: { panel: { image: 'http://example.com/a' } } }, defaults));
+  for (const key of ['__proto__', 'constructor', 'prototype']) {
+    const malicious = JSON.parse(`{"version":1,"settings":{"${key}":{"polluted":true}}}`);
+    assert.throws(() => importTemplate(malicious, defaults));
+  }
+  assert.equal(({} as Record<string, unknown>).polluted, undefined);
 });
 test('無効な設定変更は編集中の下書きを壊さない', () => {
   const session = { scope: 'channel', original: { base: defaults }, value: {} } as EditorSession;

@@ -140,8 +140,25 @@ test('壊れた動画と映像のないファイルは診断可能なエラー�
     await writeFile(path, 'broken');
     await assert.rejects(videoDuration(path), error => error instanceof VideoDecodeError && error.stage === 'probe');
     await assert.rejects(extractVideoFrame(path, 0, 64), error => error instanceof VideoDecodeError && error.stage === 'frame');
-    const audio = join(directory, 'audio.wav');
+    const audio = join(directory, 'audio.m4a');
     await promisify(execFile)(process.env.FFMPEG_PATH ?? 'ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'anullsrc', '-t', '1', audio]);
     await assert.rejects(videoDuration(audio), error => error instanceof VideoDecodeError && error.reason === 'no_video_stream');
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('動画を装ったプレイリストから外部URLや別のローカルファイルを読み込まない', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'video-playlist-test-'));
+  try {
+    const image = join(directory, 'private.png');
+    await sharp({ create: { width: 16, height: 16, channels: 3, background: 'white' } }).png().toFile(image);
+    for (const [name, body] of [
+      ['remote.mp4', '#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\nhttps://127.0.0.1/private.ts\n#EXT-X-ENDLIST\n'],
+      ['local.mp4', `ffconcat version 1.0\nfile '${image.replaceAll('\\', '/')}'\n`],
+    ]) {
+      const path = join(directory, name!);
+      await writeFile(path, body!);
+      await assert.rejects(videoDuration(path), VideoDecodeError);
+      await assert.rejects(extractVideoFrame(path, 0, 64), VideoDecodeError);
+    }
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

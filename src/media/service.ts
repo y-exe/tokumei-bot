@@ -10,6 +10,13 @@ import { SafeHttp, WorkQueue, MAX_DOWNLOAD_BYTES } from './http.js';
 export interface MediaSource { url: string; kind: 'image' | 'animation' | 'video'; headers?: Record<string, string>; }
 export interface ResolvedMedia { provider: Provider; source: string; media: MediaSource[]; warnings: string[]; }
 export const DISCORD_FILE_LIMIT = 25 * 1024 * 1024;
+class MediaCapacityError extends UserError {
+  constructor() { super('添付ファイルの合計容量が32MiBを超えています。ファイル数やサイズを減らしてください。'); }
+}
+const appendMedia = (files: MediaFile[], file: MediaFile): void => {
+  if (files.reduce((bytes, item) => bytes + item.data.length, file.data.length) > MAX_DOWNLOAD_BYTES) throw new MediaCapacityError();
+  files.push(file);
+};
 const videoExtension: Record<string, string> = { 'video/mp4': '.mp4', 'video/webm': '.webm', 'video/quicktime': '.mov', 'audio/mpeg': '.mp3', 'application/pdf': '.pdf', 'text/plain': '.txt' };
 const safeFileName = (name: string | undefined, contentType: string | undefined, index: number): string => {
   const cleaned = (name ?? '').replace(/[^\w.\- ]/g, '_').replace(/ {2,}/g, ' ').trim().slice(-100) || `file_${index + 1}`;
@@ -85,7 +92,7 @@ export class MediaService {
       const result: MediaFile[] = [];
       for (const url of urls) {
         const response = await this.http.get(url, MAX_DOWNLOAD_BYTES);
-        result.push(await this.optimize(response.data, config, result.length, fileNameFromUrl(url), response.contentType));
+        appendMedia(result, await this.optimize(response.data, config, result.length, fileNameFromUrl(url), response.contentType));
       }
       return result;
     });
@@ -193,9 +200,9 @@ export class MediaService {
           const response = await this.http.get(item.url, DISCORD_FILE_LIMIT, item.headers);
           const original = fileNameFromUrl(item.url);
           const name = original && original !== 'proxy' ? original : undefined;
-          files.push(await this.optimize(response.data, config, files.length, name, response.contentType));
+          appendMedia(files, await this.optimize(response.data, config, files.length, name, response.contentType));
         } catch (error) {
-          if (error instanceof MediaSafetyError) throw error;
+          if (error instanceof MediaSafetyError || error instanceof MediaCapacityError) throw error;
           if (error instanceof UserError && error.message.includes('大きすぎ')) warnings.push(`元のファイル${sourceIndex + 1}は大きすぎて添付できませんでした。`);
           else warnings.push(`元のファイル${sourceIndex + 1}を取得できませんでした。取得できたファイルだけを表示しています。`);
         }

@@ -35,7 +35,7 @@ export class App {
   readonly panels: Panels;
   readonly moderation:Moderation;
   readonly editors = new Sessions<EditorSession>();
-  readonly previews = new Sessions<PreviewSession>(10 * 60_000, Number.POSITIVE_INFINITY);
+  readonly previews = new Sessions<PreviewSession>();
   readonly textRecoveries = new Sessions<TextRecoverySession>();
   constructor(readonly client: Client, readonly store: Store, readonly secrets: SecretBox, readonly media: MediaService) {
     this.posting = new Posting(store, secrets, async (guildId, channelId) => {

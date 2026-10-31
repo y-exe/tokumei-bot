@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execute = promisify(execFile);
+const inputFormats = 'mov,matroska,webm,avi,mpegts,mpegvideo,ogg,flv,asf';
 
 export class VideoDecodeError extends Error {
   constructor(readonly stage: 'probe' | 'frame', readonly reason: string, readonly exitCode?: number, readonly signal?: string) {
@@ -11,7 +12,7 @@ export class VideoDecodeError extends Error {
 
 async function run(tool: string, args: string[], stage: 'probe' | 'frame', maxBuffer: number): Promise<Buffer> {
   try {
-    return (await execute(tool, args, { encoding: 'buffer', maxBuffer, windowsHide: true })).stdout;
+    return (await execute(tool, ['-protocol_whitelist', 'file,pipe', '-format_whitelist', inputFormats, ...args], { encoding: 'buffer', maxBuffer, windowsHide: true })).stdout;
   } catch (error) {
     const failure = error as { code?: unknown; signal?: unknown; stderr?: Buffer };
     const stderr = failure.stderr?.toString() ?? '';

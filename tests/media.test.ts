@@ -17,6 +17,19 @@ test('X動画の安全判定はHTMLプレイヤーではなく元のMP4を取得
     assert.equal(videoSourceUrl(url), url);
 });
 
+test('添付とURLのファイル合計容量を制限し、容量超過は途中成功扱いにしない', async () => {
+  const data = Buffer.alloc(17 * 1024 * 1024);
+  class CapacityHttp extends SafeHttp {
+    override async get(url: string) { return { data, contentType: 'application/octet-stream', url }; }
+  }
+  const service = new MediaService(new CapacityHttp());
+  await assert.rejects(service.attachments(['https://example.com/one.bin', 'https://example.com/two.bin'], defaults), /合計容量/);
+  service.resolve = async () => ({ provider: 'direct', source: 'https://example.com/post', warnings: [], media: [
+    { url: 'https://example.com/one.bin', kind: 'video' }, { url: 'https://example.com/two.bin', kind: 'video' },
+  ] });
+  await assert.rejects(service.fromUrl('https://example.com/post', defaults), /合計容量/);
+});
+
 test('公開URLのDNS検索は絶対名を使い、検索ドメインを付けず内部IPの混在を拒否する', async () => {
   const names: string[] = [];
   const lookupMock = mock.method(dns, 'lookup', async (host: string) => {
