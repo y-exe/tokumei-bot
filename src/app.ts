@@ -488,7 +488,10 @@ export class App {
         catch{warning+='\n対応は記録済みですが、通報通知の表示を更新できませんでした。';}
       }
       if(action!=='none'&&settings.config.moderation.logChannel){
-        try{const destination=await this.channel(interaction.guildId!,settings.config.moderation.logChannel);await destination.send(payload([card('匿名つぶやき処罰通知',`対象番号：匿名${String(result.report.anonymousId).padStart(3,'0')}\n対応理由：${reason || '未記入'}\n${punishmentLabels[action as Punishment]}\n元メッセージ：[匿名つぶやき](https://discord.com/channels/${interaction.guildId}/${channelId}/${id})`,colors.danger)],false));}
+        const punishment=action==='ban'?'サーバーBANを実施しました。':action==='timeout'?'一か月タイムアウトを実施しました。':'匿名要望の使用権を永久に剥奪しました。';
+        const removal=action==='revoke'?'':result.warning?'\n(対象メッセージを自動削除できませんでした)':'\n(対象メッセージは自動削除されています)';
+        const content=`❌匿名つぶやき処罰通知❌\n\n対象番号：匿名${String(result.report.anonymousId).padStart(3,'0')}\n処罰理由：${reason || '未記入'}\n${punishment}\n元メッセージ：[匿名つぶやき](https://discord.com/channels/${interaction.guildId}/${channelId}/${id})${removal}`;
+        try{const destination=await this.channel(interaction.guildId!,settings.config.moderation.logChannel);await destination.send({content,allowedMentions:emptyMentions});}
         catch{warning+='\n処罰ログを送信できませんでした。';}
       }
       await this.respond(interaction,[card('対応を記録しました',`${punishmentLabels[action as Punishment]}で処理を終了しました。${warning?'\n'+warning:''}`,warning?colors.warning:colors.success)]);return;

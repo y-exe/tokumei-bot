@@ -264,8 +264,24 @@ test('処罰なしは通報通知だけを更新し、処罰を選んだ場合�
     assert.ok(JSON.stringify(edited).includes('終了済み'));
     assert.deepEqual(destinations, action === 'none' ? ['reports'] : ['reports', 'logs']);
     assert.equal(sent.length, action === 'none' ? 0 : 1);
-    if (sent.length) assert.ok(JSON.stringify(sent).includes('匿名つぶやき処罰通知'));
+    if (sent.length) {
+      const punishment = action === 'ban' ? 'サーバーBANを実施しました。' : action === 'timeout' ? '一か月タイムアウトを実施しました。' : '匿名要望の使用権を永久に剥奪しました。';
+      const content = `❌匿名つぶやき処罰通知❌\n\n対象番号：匿名005\n処罰理由：未記入\n${punishment}\n元メッセージ：[匿名つぶやき](https://discord.com/channels/g/c/m)${action === 'revoke' ? '' : '\n(対象メッセージは自動削除されています)'}`;
+      assert.deepEqual(sent[0], { content, allowedMentions: { parse: [] } });
+    }
   }
+});
+
+test('投稿の削除に失敗した処罰ログは削除済みと表示せず、理由のメンションも通知しない', async () => {
+  const bot = app(); let sent: unknown;
+  const config = structuredClone(defaults); config.moderation.logChannel = 'logs';
+  bot.store.settings = async () => ({ ...structuredClone(snapshot), config });
+  bot.client.guilds = { fetch: async () => ({}) } as never;
+  bot.moderation.execute = async () => ({ report: { notificationId: null, anonymousId: 12 } as never, warning: '処罰は実行済みですが、元メッセージを削除できませんでした。' });
+  bot.channel = async () => ({ send: async (value: unknown) => { sent = value; } }) as never;
+  bot.respond = async () => {};
+  await bot.modal(interaction({ memberPermissions: new PermissionsBitField(PermissionFlagsBits.ManageGuild), customId: 'punishconfirm:m:ban:c', deferReply: async () => {}, fields: { getTextInputValue: () => '@everyone 確認済み' } }) as ModalSubmitInteraction);
+  assert.deepEqual(sent, { content: '❌匿名つぶやき処罰通知❌\n\n対象番号：匿名012\n処罰理由：@everyone 確認済み\nサーバーBANを実施しました。\n元メッセージ：[匿名つぶやき](https://discord.com/channels/g/c/m)\n(対象メッセージを自動削除できませんでした)', allowedMentions: { parse: [] } });
 });
 
 test('通報通知は匿名の証拠と操作ボタンを送り、保存済みnonceで再送の重複を抑える', async () => {
