@@ -243,6 +243,31 @@ test('通報・処罰理由は任意のフォームを開き、空欄で確定�
   assert.deepEqual(reasons,['','']);
 });
 
+test('処罰なしは通報通知だけを更新し、処罰を選んだ場合だけ処罰ログに送る', async () => {
+  for (const action of ['none', 'ban', 'timeout', 'revoke'] as const) {
+    const bot = app(); const edited: unknown[] = []; const sent: unknown[] = []; const destinations: string[] = [];
+    const config = structuredClone(defaults);
+    config.moderation.reportChannel = 'reports'; config.moderation.logChannel = 'logs';
+    bot.store.settings = async () => ({ ...structuredClone(snapshot), config });
+    bot.client.guilds = { fetch: async () => ({}) } as never;
+    bot.moderation.execute = async (_guild, _channel, _message, _actor, selected) => {
+      assert.equal(selected, action);
+      return { report: { notificationId: 'notice', anonymousId: 5 } as never, warning: '' };
+    };
+    bot.channel = async (_guild, channel) => {
+      destinations.push(channel);
+      return { messages: { edit: async (id: string, value: unknown) => { assert.equal(id, 'notice'); edited.push(value); } }, send: async (value: unknown) => { sent.push(value); } } as never;
+    };
+    bot.respond = async () => {};
+    await bot.modal(interaction({ memberPermissions: new PermissionsBitField(PermissionFlagsBits.ManageGuild), customId: `punishconfirm:m:${action}:c`, deferReply: async () => {}, fields: { getTextInputValue: () => '' } }) as ModalSubmitInteraction);
+    assert.equal(edited.length, 1);
+    assert.ok(JSON.stringify(edited).includes('終了済み'));
+    assert.deepEqual(destinations, action === 'none' ? ['reports'] : ['reports', 'logs']);
+    assert.equal(sent.length, action === 'none' ? 0 : 1);
+    if (sent.length) assert.ok(JSON.stringify(sent).includes('匿名つぶやき処罰通知'));
+  }
+});
+
 test('通報通知は匿名の証拠と操作ボタンを送り、保存済みnonceで再送の重複を抑える', async () => {
   const bot = app(); const completions: unknown[][] = []; let sent: unknown;
   bot.store.settings = async () => ({ ...structuredClone(snapshot), config: { ...structuredClone(defaults), moderation: { ...defaults.moderation, reportThreshold: 1, reportChannel: 'destination' } } });

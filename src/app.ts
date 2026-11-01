@@ -485,10 +485,10 @@ export class App {
       const settings=await this.store.settings(interaction.guildId!,channelId,true);let warning=result.warning;
       if(result.report.notificationId&&settings.config.moderation.reportChannel){
         try{const destination=await this.channel(interaction.guildId!,settings.config.moderation.reportChannel);await destination.messages.edit(result.report.notificationId,{content:null,embeds:[],components:[reportView(result.report,isRequestMode(settings.config),punishmentLabels[action as Punishment])],flags:MessageFlags.IsComponentsV2,allowedMentions:emptyMentions});}
-        catch{warning+='\n処罰は実行済みですが、通報通知の表示を更新できませんでした。';}
+        catch{warning+='\n対応は記録済みですが、通報通知の表示を更新できませんでした。';}
       }
-      if(settings.config.moderation.logChannel){
-        try{const destination=await this.channel(interaction.guildId!,settings.config.moderation.logChannel);await destination.send(payload([card(action==='none'?'匿名つぶやき通報の対応記録':'匿名つぶやき処罰通知',`対象番号：匿名${String(result.report.anonymousId).padStart(3,'0')}\n対応理由：${reason || '未記入'}\n${punishmentLabels[action as Punishment]}\n元メッセージ：[匿名つぶやき](https://discord.com/channels/${interaction.guildId}/${channelId}/${id})`,action==='none'?colors.info:colors.danger)],false));}
+      if(action!=='none'&&settings.config.moderation.logChannel){
+        try{const destination=await this.channel(interaction.guildId!,settings.config.moderation.logChannel);await destination.send(payload([card('匿名つぶやき処罰通知',`対象番号：匿名${String(result.report.anonymousId).padStart(3,'0')}\n対応理由：${reason || '未記入'}\n${punishmentLabels[action as Punishment]}\n元メッセージ：[匿名つぶやき](https://discord.com/channels/${interaction.guildId}/${channelId}/${id})`,colors.danger)],false));}
         catch{warning+='\n処罰ログを送信できませんでした。';}
       }
       await this.respond(interaction,[card('対応を記録しました',`${punishmentLabels[action as Punishment]}で処理を終了しました。${warning?'\n'+warning:''}`,warning?colors.warning:colors.success)]);return;
