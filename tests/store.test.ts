@@ -16,7 +16,7 @@ before(async () => {
 });
 after(async () => { if (store) await store.close(); if (server) await server.stop(); if (db) await db.close(); });
 
-test('設定バックアップは保存後の全設定を保持し、サーバー全体8件で古い順に削除する', async () => {
+test('設定バックアップは件数制限なしで全設定を保持し、保存から60日で参照と保存を終了する', async () => {
   const g='100000000000000081', c='200000000000000081';
   await store.saveSettings(await store.settings(g,c),'channel',{panel:{title:'最初の保存'}},actor,'保存先');
   const first=(await store.settingsBackups(g))[0]!;
@@ -33,13 +33,22 @@ test('設定バックアップは保存後の全設定を保持し、サーバ�
   assert.equal(await store.settingsBackup(g,'other',first.id),null);
   assert.equal(await store.deleteSettingsBackup('other',c,first.id),false);
   assert.equal(await store.deleteSettingsBackup(g,null,first.id),false);
-  await store.pool.query("UPDATE v2_revisions SET created_at=now()-interval '200 days' WHERE id=$1",[first.id]);
-  await store.cleanup();assert.ok(await store.settingsBackup(g,c,first.id));
+  await store.pool.query("UPDATE v2_revisions SET created_at=now()-interval '59 days 23 hours' WHERE id=$1",[first.id]);
+  assert.ok(await store.settingsBackup(g,c,first.id));
+  await store.pool.query("UPDATE v2_revisions SET created_at=now()-interval '60 days' WHERE id=$1",[first.id]);
+  assert.equal(await store.settingsBackup(g,c,first.id),null);
+  assert.ok(!(await store.settingsBackups(g)).some(item=>item.id===first.id));
+  await store.cleanup();assert.equal((await store.pool.query('SELECT 1 FROM v2_revisions WHERE id=$1',[first.id])).rowCount,0);
   await store.pool.query('INSERT INTO v2_revisions(guild_id,channel_id,config,actor_id) VALUES($1,$2,$3,$4)',[g,c,{panel:{title:'移行前の履歴'}},actor]);
   const legacy=(await store.settingsBackups(g))[0]!;
   assert.equal((await store.settingsBackup(g,c,legacy.id))?.panel?.title,'移行前の履歴');
   for(let n=0;n<25;n++)await store.saveSettings(await store.settings(g,c,true),'channel',{panel:{title:`保存${n}`}},actor,'保存先');
-  assert.equal((await store.settingsBackups(g)).length,8);
+  const page=await store.settingsBackups(g);
+  assert.equal(page.length,26);
+  const next=await store.settingsBackups(g,undefined,page[24]!.id);
+  assert.equal(next.length,2);
+  assert.equal(new Set([...page.slice(0,25),...next].map(item=>item.id)).size,27);
+  assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM v2_revisions WHERE guild_id=$1',[g])).rows[0].n,27);
   assert.equal(await store.settingsBackup(g,c,first.id),null);
   const latest=(await store.settingsBackups(g))[0]!;
   await store.disable(g,c);assert.ok(await store.settingsBackup(g,c,latest.id));
@@ -70,7 +79,7 @@ test('停止しても最新設定と名前を保持し、同じサーバーの�
   assert.equal((await store.settings(g,c,true)).enabled,false);
 });
 
-test('バックアップ8枠はサーバーごとに共有し、並行保存や権限による絞り込みでも混ざらない',async()=>{
+test('バックアップは並行保存でも欠落せず、権限やサーバーで分離し、起動時に60日経過分だけ削除する',async()=>{
   const g='backup-pool',role='400000000000000081';
   await store.settings(g,'init');
   await Promise.all(Array.from({length:12},async(_,index)=>{
@@ -78,9 +87,9 @@ test('バックアップ8枠はサーバーごとに共有し、並行保存や�
     await store.saveSettings(await store.settings(g,channel,true),'channel',{moderation:{managerRoles:[role]}},actor,`保存先${index}`);
   }));
   const backups=await store.settingsBackups(g);
-  assert.equal(backups.length,8);assert.equal(new Set(backups.map(item=>item.id)).size,8);
+  assert.equal(backups.length,12);assert.equal(new Set(backups.map(item=>item.id)).size,12);
   assert.ok(backups.every(item=>item.channelName.startsWith('保存先')));
-  assert.equal((await store.settingsBackups(g,[role])).length,8);
+  assert.equal((await store.settingsBackups(g,[role])).length,12);
   assert.equal((await store.settingsBackups(g,[])).length,0);
   await store.saveSettings(await store.settings('other-backup-pool','c'),'channel',{},actor,'別サーバー');
   assert.equal((await store.settingsBackups('other-backup-pool')).length,1);
@@ -94,10 +103,11 @@ test('バックアップ8枠はサーバーごとに共有し、並行保存や�
   assert.equal(await store.setPanel(g,settings.channelId,'stale-panel','webhook',beforeStop),false);
   assert.equal((await store.settings(g,settings.channelId,true)).enabled,false);
   await assert.rejects(store.saveSettings(beforeStop,'channel',{},actor),/更新されました/);
-  assert.equal((await store.settingsBackups(g)).length,8);
+  assert.equal((await store.settingsBackups(g)).length,12);
   for(let index=0;index<10;index++)await store.pool.query('INSERT INTO v2_revisions(guild_id,config,actor_id) VALUES($1,$2,$3)',['old-backup-pool',defaults,actor]);
+  await store.pool.query("INSERT INTO v2_revisions(guild_id,config,actor_id,created_at) VALUES($1,$2,$3,now()-interval '61 days')",['old-backup-pool',defaults,actor]);
   await store.initialize();
-  assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM v2_revisions WHERE guild_id=$1',['old-backup-pool'])).rows[0].n,8);
+  assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM v2_revisions WHERE guild_id=$1',['old-backup-pool'])).rows[0].n,10);
   assert.equal((await store.settingsBackups('other-backup-pool')).length,1);
 });
 
@@ -137,7 +147,7 @@ test('保存0の最小診断は24時間で失効し、保存0チャンネルの�
   assert.equal((await store.pool.query("SELECT 1 FROM v2_diagnostics WHERE code='11223344'")).rowCount, 0);
 });
 
-test('処罰中の追加通報と二重実行を拒否し、要望の永久停止は通常投稿へ影響しない',async()=>{
+test('処罰中の追加通報と二重実行を拒否し、利用停止は対象チャンネルだけに適用する',async()=>{
   const g='moderation-g',c='moderation-c',m='moderation-m';
   await store.settings(g,c,true);const config=structuredClone(defaults);config.policy.cooldown=0;
   await store.reserve({operationId:'moderation-post',guildId:g,channelId:c,userId:'target',text:'本文'},config);await store.markSent('moderation-post',m,[]);
@@ -147,11 +157,13 @@ test('処罰中の追加通報と二重実行を拒否し、要望の永久停�
   await assert.rejects(store.addReport(post,'reporter2','追加',null),/処理中/);
   await store.releaseReportAction(g,m,token);
   assert.equal(await store.addReport(post,'reporter2','追加',null),2);
-  const second=await store.claimReportAction(g,c,m);await store.finishReportAction(g,m,second,'manager','revoke','理由','target');
+  const second=await store.claimReportAction(g,c,m);await store.finishReportAction(g,m,second,'manager','restrict','理由','target');
   assert.equal(await store.reportDetail(g,c,m),null);
   await assert.rejects(store.addReport(post,'reporter3','追加',null),/対応済み/);
-  config.identity.kind='request';await assert.rejects(store.reserve({operationId:'blocked-request',guildId:g,channelId:c,userId:'target',text:'要望'},config),/使用権/);
-  config.identity.kind='chat';await assert.doesNotReject(store.reserve({operationId:'allowed-chat',guildId:g,channelId:c,userId:'target',text:'通常投稿'},config));
+  await assert.rejects(store.reserve({operationId:'blocked-channel',guildId:g,channelId:c,userId:'target',text:'本文'},config),/利用が停止/);
+  await assert.doesNotReject(store.reserve({operationId:'allowed-channel',guildId:g,channelId:'other-channel',userId:'target',text:'通常投稿'},config));
+  await store.releaseChannelRestriction(g,c,'target','manager');
+  await assert.doesNotReject(store.checkRestrictions(g,'target',c));
 });
 
 test('Bot管理者のWeb開示でも保存0・期限切れ・削除済みの投稿者は取得できない',async()=>{

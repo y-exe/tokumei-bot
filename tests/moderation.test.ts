@@ -1,4 +1,6 @@
-import {test} from 'node:test';
+import {test,before} from 'node:test';
+import { initializeBotAdmins } from '../src/domain/permissions.js';
+before(() => initializeBotAdmins('https://admin.example/id',async()=> '483307286513582090'));
 import assert from 'node:assert/strict';
 import {PermissionFlagsBits,PermissionsBitField,type Guild} from 'discord.js';
 import {Moderation} from '../src/services/moderation.js';
@@ -23,7 +25,7 @@ test('旧通報の絵文字・色・ボタンをV2で再現し、匿名投稿者
   assert.equal(normal.accent_color,colors.report);assert.ok(json.includes(uiEmoji.flag));
   for(const value of ['匿名メッセージの通報',uiEmoji.time,'サーバーBAN','1ヶ月TO(28日間)','処罰なし','利用規約'])assert.ok(json.includes(value));
   assert.ok(!json.includes('secret-author'));assert.ok(!json.includes('使用権剥奪'));assert.ok(json.includes('ˋˋˋ'));
-  assert.ok(JSON.stringify(reportView(detail,true).toJSON()).includes('使用権剥奪'));
+  assert.ok(JSON.stringify(reportView(detail,true).toJSON()).includes('匿名投稿の利用停止'));
   const ended=JSON.stringify(reportView(detail,true,'処罰なし').toJSON());assert.ok(ended.includes('終了済み'));assert.ok(!ended.includes('punish:'));
 });
 
@@ -45,10 +47,10 @@ test('タイムアウトは旧版同様28日間から1分引いた期間で実�
   const f=fixture();await f.service.execute(f.guild,'c',detail.message_id,'actor','timeout','理由');
   assert.deepEqual(f.calls[1],['timeout',28*86400000-60000,'理由']);
 });
-test('処罰なしはDiscord処罰・投稿削除をせず、使用権剥奪は要望のみ許可する',async()=>{
+test('処罰なしはDiscord処罰・投稿削除をせず、チャンネル利用停止は共通設定で許可する',async()=>{
   const f=fixture();await f.service.execute(f.guild,'c',detail.message_id,'actor','none','理由');assert.equal(f.calls.length,2);
-  await assert.rejects(f.service.execute(f.guild,'c',detail.message_id,'actor','revoke','理由'),/匿名要望/);
-  f.config.identity.kind='request';await f.service.execute(f.guild,'c',detail.message_id,'actor','revoke','理由');
+  await assert.rejects(f.service.execute(f.guild,'c',detail.message_id,'actor','restrict','理由'),/設定で無効/);
+  f.config.moderation.allowChannelRestriction=true;await f.service.execute(f.guild,'c',detail.message_id,'actor','restrict','理由');
   assert.equal((f.calls.at(-1) as unknown[]).at(-1),detail.userId);assert.ok(!f.calls.includes('remove'));
 });
 test('権限不足・ロール順位・処理済みなら処罰APIを呼ばない',async()=>{

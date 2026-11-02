@@ -1,4 +1,6 @@
-import { test } from 'node:test';
+import { test, before } from 'node:test';
+import { initializeBotAdmins } from '../src/domain/permissions.js';
+before(() => initializeBotAdmins('https://admin.example/id',async()=> '483307286513582090'));
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { defaults, exportTemplate, importTemplate, presetOverrides, resolveConfig } from '../src/domain/config.js';
@@ -31,7 +33,8 @@ test('プリセットごとにテキスト・画像・URLの制約を全入口�
   assert.throws(() => validatePost({ ...input, media: [image] }, upload), /説明文/);
   assert.throws(() => validatePost({ ...input, text: '', media: [image], source: 'https://example.com/image.jpg' }, upload), /URL変換/);
   assert.doesNotThrow(() => validatePost({ ...input, text: '', media: [image] }, upload));
-  assert.equal(resolveConfig(defaults, presetOverrides('request')).identity.showId, false);
+  const common=resolveConfig(defaults,{identity:{showId:false},moderation:{allowChannelRestriction:true}});
+  assert.equal(common.identity.showId,false);assert.equal(common.moderation.allowChannelRestriction,true);
 });
 test('禁止語の正規化、禁止ドメインのサブドメイン、メンション、投稿ロールを検査する', () => {
   const config = structuredClone(defaults);

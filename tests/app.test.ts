@@ -1,4 +1,6 @@
-import { test, mock } from 'node:test';
+import { test, mock, before } from 'node:test';
+import { initializeBotAdmins } from '../src/domain/permissions.js';
+before(() => initializeBotAdmins('https://admin.example/id',async()=> '483307286513582090'));
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { PermissionFlagsBits, PermissionsBitField, ComponentType, ChannelType } from 'discord.js';
@@ -157,6 +159,22 @@ test('他チャンネルのバックアップは適用直前にも保存元の�
   assert.deepEqual(bot.editors.get(id,'alice','g').value,{});
 });
 
+test('バックアップ一覧は25件ずつ移動し、非表示の候補や期限切れの設定を適用できない',async()=>{
+  const bot=app();let shown='';let expired=false;
+  const backups=Array.from({length:27},(_,index)=>({id:String(100-index),createdAt:new Date(),channelId:'c',channelName:'保存先'}));
+  bot.store.settingsBackups=async(_guild,_roles,before)=>backups.filter(item=>!before||BigInt(item.id)<BigInt(before)).slice(0,26);
+  bot.store.settingsBackup=async()=>expired?null:structuredClone(defaults);
+  const id=bot.editors.create({owner:'alice',guildId:'g',channelId:'c',scope:'channel',original:snapshot,value:{},installing:false});
+  const request=(selected='75')=>interaction({memberPermissions:new PermissionsBitField(PermissionFlagsBits.ManageGuild),values:[selected],isStringSelectMenu:()=>true,update:async(value:unknown)=>{shown=JSON.stringify(value);}});
+  await bot.configure(request() as never,id,'restore');
+  await assert.rejects(bot.configure(request() as never,id,'restoreselect'),/一覧/);
+  await bot.configure(request() as never,id,'restorenext');assert.ok(shown.includes('2ページ目'));
+  await bot.configure(request() as never,id,'restoreselect');
+  expired=true;await assert.rejects(bot.configure(request() as never,id,'restoreapply'),/保存期限切れ/);
+  assert.deepEqual(bot.editors.get(id,'alice','g').value,{});
+  await bot.configure(request() as never,id,'restoreprev');assert.ok(shown.includes('1ページ目'));
+});
+
 test('別チャンネルの設定選択時も管理権限を再確認する',async()=>{
   const bot=app();let shown='';const role='400000000000000091';
   bot.store.settings=async(_g,c)=>({...structuredClone(snapshot),config:{...structuredClone(defaults),moderation:{...defaults.moderation,managerRoles:c==='c'?[role]:[]}}});
@@ -218,6 +236,9 @@ test('機能変更で説明文を切り替え、手動で書いた説明文は�
   }
   session.setupPage = undefined;
   await bot.configure(request(['urls']) as never,id,'content');assert.equal(session.value.content?.images,false);assert.equal(session.value.content?.urls,true);
+  assert.equal(session.value.content?.caption,true);
+  await bot.configure(request(['urls','noCaption']) as never,id,'content');assert.equal(session.value.content?.caption,false);
+  await bot.configure(request(['urls']) as never,id,'content');assert.equal(session.value.content?.caption,true);
   session.setupPage = undefined; session.value.panel = { ...session.value.panel, description: '手動の説明文' };
   await bot.configure(request(['text']) as never, id, 'content'); assert.equal(session.value.panel.description, '手動の説明文');
 });
@@ -430,7 +451,7 @@ test('通報・処罰理由は任意のフォームを開き、空欄で確定�
 });
 
 test('処罰なしは通報通知だけを更新し、処罰を選んだ場合だけ処罰ログに送る', async () => {
-  for (const action of ['none', 'ban', 'timeout', 'revoke'] as const) {
+  for (const action of ['none', 'ban', 'timeout', 'restrict'] as const) {
     const bot = app(); const edited: unknown[] = []; const sent: unknown[] = []; const destinations: string[] = [];
     const config = structuredClone(defaults);
     config.moderation.reportChannel = 'reports'; config.moderation.logChannel = 'logs';
@@ -451,8 +472,8 @@ test('処罰なしは通報通知だけを更新し、処罰を選んだ場合�
     assert.deepEqual(destinations, action === 'none' ? ['reports'] : ['reports', 'logs']);
     assert.equal(sent.length, action === 'none' ? 0 : 1);
     if (sent.length) {
-      const punishment = action === 'ban' ? 'サーバーBANを実施しました。' : action === 'timeout' ? '一か月タイムアウトを実施しました。' : '匿名要望の使用権を永久に剥奪しました。';
-      const content = `❌匿名つぶやき処罰通知❌\n\n対象番号：匿名005\n処罰理由：未記入\n${punishment}\n元メッセージ：[匿名つぶやき](https://discord.com/channels/g/c/m)${action === 'revoke' ? '' : '\n(対象メッセージは自動削除されています)'}`;
+      const punishment = action === 'ban' ? 'サーバーBANを実施しました。' : action === 'timeout' ? '一か月タイムアウトを実施しました。' : '匿名投稿の利用をこのチャンネルで無期限停止しました。';
+      const content = `**❌匿名つぶやき処罰通知❌**\n\n**対象番号：**匿名005\n**処罰理由：**未記入\n${punishment}\n**元メッセージ：**[匿名つぶやき](https://discord.com/channels/g/c/m)${action === 'restrict' ? '' : '\n(対象メッセージは自動削除されています)'}`;
       assert.deepEqual(sent[0], { content, allowedMentions: { parse: [] } });
     }
   }
@@ -467,7 +488,7 @@ test('投稿の削除に失敗した処罰ログは削除済みと表示せず�
   bot.channel = async () => ({ send: async (value: unknown) => { sent = value; } }) as never;
   bot.respond = async () => {};
   await bot.modal(interaction({ memberPermissions: new PermissionsBitField(PermissionFlagsBits.ManageGuild), customId: 'punishconfirm:m:ban:c', deferReply: async () => {}, fields: { getTextInputValue: () => '@everyone 確認済み' } }) as ModalSubmitInteraction);
-  assert.deepEqual(sent, { content: '❌匿名つぶやき処罰通知❌\n\n対象番号：匿名012\n処罰理由：@everyone 確認済み\nサーバーBANを実施しました。\n元メッセージ：[匿名つぶやき](https://discord.com/channels/g/c/m)\n(対象メッセージを自動削除できませんでした)', allowedMentions: { parse: [] } });
+  assert.deepEqual(sent, { content: '**❌匿名つぶやき処罰通知❌**\n\n**対象番号：**匿名012\n**処罰理由：**@everyone 確認済み\nサーバーBANを実施しました。\n**元メッセージ：**[匿名つぶやき](https://discord.com/channels/g/c/m)\n(対象メッセージを自動削除できませんでした)', allowedMentions: { parse: [] } });
 });
 
 test('通報通知は匿名の証拠と操作ボタンを送り、保存済みnonceで再送の重複を抑える', async () => {
@@ -564,6 +585,19 @@ test('その他の自動処理設定は下書きに保存し、変更後も説�
     await assert.rejects(bot.modal(submit()),/有効・無効/);assert.deepEqual(bot.editors.get(id,'alice','g').value,before);
     value='off';
   }
+});
+
+test('利用停止の設定は下書きに保持し、解除は管理権限を確認して対象チャンネルだけに行う',async()=>{
+  const bot=app();let shown='',released:unknown[]=[];
+  const id=bot.editors.create({owner:'alice',guildId:'g',channelId:'c',scope:'channel',original:snapshot,value:{},installing:false,returnToOther:true});
+  const manager={memberPermissions:new PermissionsBitField(PermissionFlagsBits.ManageGuild)};
+  await bot.configure(interaction({...manager,update:async(value:unknown)=>{shown=JSON.stringify(value);}}) as never,id,'channelrestriction');
+  assert.equal(bot.editors.get(id,'alice','g').value.moderation?.allowChannelRestriction,true);
+  assert.equal((await bot.store.settings('g','c')).config.moderation.allowChannelRestriction,false);
+  assert.ok(shown.includes('解除する'));assert.ok(shown.includes('下書き'));
+  bot.store.releaseChannelRestriction=async(...args)=>{released=args;};
+  await bot.modal(interaction({...manager,customId:`edit:${id}:restrictionrelease`,fields:{getTextInputValue:()=> '300000000000000099'},isFromMessage:()=>true,update:async(value:unknown)=>{shown=JSON.stringify(value);}}) as ModalSubmitInteraction);
+  assert.deepEqual(released,['g','c','300000000000000099','alice']);assert.ok(shown.includes('利用停止を解除しました'));
 });
 
 test('案内の色は空欄と「なし」で解除でき、不正入力では下書きを変更しない', async () => {

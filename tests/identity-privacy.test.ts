@@ -22,7 +22,7 @@ before(async () => {
   await old.reserve(input('legacy'), config); await old.markSent('legacy', '600000000000000123', []);
   await old.addReport((await old.post(guild, channel, '600000000000000123'))!, reporter, '通報', null);
   await old.pool.query("INSERT INTO v2_restrictions VALUES($1,'restricted-user',now()+interval '1 day','制限')", [guild]);
-  await old.pool.query("INSERT INTO v2_request_restrictions(guild_id,user_id,reason) VALUES($1,'revoked-user','制限')", [guild]);
+  await old.pool.query("INSERT INTO v2_channel_restrictions(guild_id,channel_id,user_id,reason) VALUES($1,$2,'revoked-user','制限')", [guild,channel]);
   await old.pool.query("INSERT INTO v2_actions(guild_id,actor_id,action) VALUES($1,$2,'resolve')", [guild, actor]);
   await old.pool.query('CREATE TABLE unrelated_history(user_id text)'); await old.pool.query('INSERT INTO unrelated_history VALUES($1)', [user]);
   await old.pool.query("INSERT INTO v2_legacy_lookup_denials VALUES('600000000000009999')");
@@ -44,8 +44,8 @@ test('既存の投稿・通報・利用停止を失わずIDを保護し、他プ
   assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM v2_posts')).rows[0].n, 1);
   assert.equal((await store.pool.query('SELECT user_id FROM unrelated_history')).rows[0].user_id, user);
   assert.equal((await store.pool.query('SELECT message_key FROM v2_legacy_lookup_denials')).rows[0].message_key, store.identityKey('legacy-lookup-message', '600000000000009999'));
-  await assert.rejects(store.checkRestrictions(guild, 'restricted-user', false), /利用が制限/);
-  await assert.rejects(store.checkRestrictions(guild, 'revoked-user', true), /使用権/);
+  await assert.rejects(store.checkRestrictions(guild, 'restricted-user', channel), /利用が制限/);
+  await assert.rejects(store.checkRestrictions(guild, 'revoked-user', channel), /利用が停止/);
   for (const table of ['v2_actions', 'v2_revisions']) {
     const rows = (await store.pool.query(`SELECT actor_id FROM ${table}`)).rows;
     assert.ok(rows.every(row => /^h1:[a-f0-9]{64}$/.test(row.actor_id)));
@@ -63,7 +63,7 @@ test('新規投稿の本人照合・通報者照合・利用停止も平文IDを
   const row = (await store.pool.query("SELECT reporter_id,reporter_ciphertext,evidence FROM v2_reports WHERE message_id='600000000000000124'")).rows[0];
   assert.ok(!JSON.stringify(row).includes(user)); assert.ok(!JSON.stringify(row).includes(reporter));
   await store.restrict(guild, '600000000000000124', actor, 24);
-  await assert.rejects(store.checkRestrictions(guild, user, false), /利用が制限/);
+  await assert.rejects(store.checkRestrictions(guild, user, channel), /利用が制限/);
   await assert.rejects(store.reserve(input('restricted'), config), /利用が制限/);
 });
 

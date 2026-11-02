@@ -8,7 +8,6 @@ import { postCard } from '../ui/post.js';
 import type { Config } from '../domain/config.js';
 import { SerialQueue } from '../infra/serial.js';
 import { nextAvatar } from '../domain/avatar.js';
-import {isRequestMode} from '../domain/config.js';
 import { deliveryError } from './delivery-error.js';
 import { checkMediaSafety } from '../media/safety-policy.js';
 import { SafeHttp, MAX_DOWNLOAD_BYTES } from '../media/http.js';
@@ -90,7 +89,7 @@ export class Posting {
     const now=Date.now();
     for(const [operation,at] of this.attempts)if(at<now-600_000)this.attempts.delete(operation);
     if(this.attempts.has(input.operationId))throw new UserError('この投稿は処理済みです。再送は行いません。');
-    await this.store.checkRestrictions(input.guildId,input.userId,isRequestMode(config));
+    await this.store.checkRestrictions(input.guildId,input.userId,input.channelId);
     const key=`${input.guildId}:${input.channelId}`;
     const userKey=this.secrets.fingerprint('user',input.guildId,input.userId);
     const state=this.volatile.get(key)??{lastUser:'',users:new Map()};

@@ -1,4 +1,6 @@
-import { test } from 'node:test';
+import { test, before } from 'node:test';
+import { initializeBotAdmins } from '../src/domain/permissions.js';
+before(() => initializeBotAdmins('https://admin.example/id',async()=> '483307286513582090'));
 import assert from 'node:assert/strict';
 import type { Message } from 'discord.js';
 import type { Store } from '../src/infra/store.js';

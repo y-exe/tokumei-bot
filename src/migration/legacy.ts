@@ -50,7 +50,12 @@ export function planLegacy(bundle: LegacyBundle, mappingInput: unknown, now = ne
     }
     configSchema.parse(base);
     plan.guilds.set(guildId, base);
-    const overrides = presetOverrides(channel.channel_type === 'request' ? 'request' : 'chat');
+    const overrides = presetOverrides('chat');
+    if (channel.channel_type === 'request') {
+      overrides.identity = { ...overrides.identity, showId: false };
+      overrides.content = { ...overrides.content, urls: false };
+      overrides.moderation = { ...overrides.moderation, allowDirectPosts: true, allowChannelRestriction: true };
+    }
     if (channel.mode === 'image' || channel.source === 'image') Object.assign(overrides, presetOverrides('image'));
     plan.channels.push({ guildId, channelId, overrides, webhook: channel.webhook_url });
     const state = object(bundle.anonymous?.[channelId]);

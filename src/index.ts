@@ -16,6 +16,7 @@ import { guardChannel } from './services/channel-guard.js';
 import { lookupServer } from './infra/lookup.js';
 import { commandRegistrationApi, registerGlobalCommands } from './infra/command-registration.js';
 import { diagnosticDetails } from './infra/diagnostics.js';
+import { initializeBotAdmins, refreshBotAdmins } from './domain/permissions.js';
 
 const token = process.env.DISCORD_BOT_TOKEN ?? process.env.token;
 const database = process.env.DATABASE_URL;
@@ -26,6 +27,7 @@ if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw 
 sharp.cache(false);
 sharp.concurrency(1);
 const secrets = new SecretBox(key);
+await initializeBotAdmins(process.env.BOT_ADMIN_ID_URL, async url => (await new SafeHttp().get(url,128,{'Cache-Control':'no-cache',Pragma:'no-cache'})).data.toString('utf8'));
 const store = new Store(database, secrets);
 await store.initialize();
 await initializeSafety();
@@ -58,11 +60,13 @@ client.once(Events.ClientReady, async ready => {
     if (result.failed.length) console.error(`絵文字を追加できなかったため標準表示を使用します: ${result.failed.join('・')}`);
   } catch { console.error('案内用絵文字の同期に失敗したため標準表示を使用します。'); }
   await app.auditPanels().catch(() => console.error('起動時の案内確認に失敗しました。'));
+  await app.refreshReportNotices().catch(() => console.error('起動時の通報案内更新に失敗しました。'));
   console.info(`匿名Bot v2 起動完了: ${ready.user.username}`);
 });
 await store.cleanup();
 const cleanup = setInterval(() => {
   app.editors.sweep(); app.previews.sweep(); app.textRecoveries.sweep(); app.posting.sweep();
+  void refreshBotAdmins().catch(() => console.error('Bot運営者IDの更新に失敗しました。有効期限後は運営者権限を停止します。'));
   void store.cleanup().catch(() => console.error('保存期限の削除処理に失敗しました。'));
   void app.retryReportNotices().catch(() => console.error('未通知の通報を確認できませんでした。'));
   void Promise.all([...new Set([process.env.WATCHER_PUSH_URL,process.env.WATCHER_IMAGE_PUSH_URL])]

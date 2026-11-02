@@ -59,6 +59,9 @@ test('設定内の選択項目はすべて説明付きで、公開案内の投�
     for (const option of select.options as {description?: string}[]) assert.ok(option.description && option.description.length <= 100);
   }
   const editor=editorView('s',session).map(item=>item.toJSON());
+  const contentSelect=flatten(editor).find(item=>item.custom_id==='cfg:s:content')!;
+  const noCaption=(contentSelect.options as {value:string;label:string;default:boolean}[]).find(item=>item.value==='noCaption')!;
+  assert.equal(noCaption.label,'画像に説明文を加えない');assert.equal(noCaption.default,false);
   for(const action of ['appearance','rules'])assert.equal(flatten(editor).find(item=>item.custom_id===`cfg:s:${action}`)?.style,1);
   assert.equal(flatten(editor).find(item=>item.custom_id==='cfg:s:cancel')?.style,4);
   for(const setupPage of [0,1,2] as const)assert.equal(flatten(setupView('s',{...session,setupPage}).map(item=>item.toJSON())).find(item=>item.custom_id==='cfg:s:cancel')?.style,4);
@@ -78,9 +81,9 @@ test('設定内の選択項目はすべて説明付きで、公開案内の投�
   assert.deepEqual(customIds(children[11]),['cfg:s:save','cfg:s:reset','cfg:s:export','cfg:s:import','cfg:s:cancel']);
   const other=otherView('s',session).map(item=>item.toJSON());
   const sections=flatten(other).filter(item=>item.type===ComponentType.Section);
-  assert.equal(sections.length,7);
+  assert.equal(sections.length,8);
   for(const section of sections)assert.equal((section.accessory as {type:number}).type,ComponentType.Button);
-  assert.equal(flatten(other).filter(item=>item.type===ComponentType.Separator).length,8);
+  assert.equal(flatten(other).filter(item=>item.type===ComponentType.Separator).length,9);
   assert.ok(!customIds(other).includes('cfg:s:buttons'));
   assert.ok(flatten(other).filter(item=>typeof item.type==='number').length<=40);
   for(const action of ['limitsbasic','spam','identity','urlcleanup','references','restore'])assert.ok(customIds(other).includes(`cfg:s:${action}`));
@@ -106,13 +109,13 @@ test('保存設定の選択は25件ずつ表示し、設定プレビューにも
   assert.equal((select.options as unknown[]).length,25);assert.ok(customIds(view).includes('cfg:s:reusenext'));
   assert.ok(flatten(view).filter(item=>typeof item.type==='number').length<=40);
   config.panel.image='https://example.com/image.jpg';config.panel.thumbnail='https://example.com/icon.png';config.panel.footer='フッター';
-  session.backups=Array.from({length:8},(_,index)=>({id:String(index+1),channelId:'c',channelName:'設定したチャンネル',createdAt:new Date()}));
+  session.backups=Array.from({length:26},(_,index)=>({id:String(index+1),channelId:'c',channelName:'設定したチャンネル',createdAt:new Date()}));
   session.selectedBackup='1';session.pendingRevision=config;
   for(const deletingBackup of [false,true]) {
     const backups=backupsView('s',{...session,deletingBackup}).map(item=>item.toJSON());
     const options=flatten(backups).find(item=>item.type===ComponentType.StringSelect)!.options as {label:string;description:string}[];
-    assert.equal(options.length,8);assert.equal(options[0]!.label,'設定したチャンネル');
-    assert.ok(!options[0]!.description.includes('#'));assert.ok(!customIds(backups).includes('cfg:s:restorenext'));
+    assert.equal(options.length,25);assert.equal(options[0]!.label,'設定したチャンネル');
+    assert.ok(!options[0]!.description.includes('#'));assert.ok(customIds(backups).includes('cfg:s:restorenext'));
     assert.ok(flatten(backups).filter(item=>typeof item.type==='number').length<=40);
     assert.equal(customIds(backups).includes('cfg:s:restoredeleteconfirm'),deletingBackup);
   }
@@ -163,7 +166,7 @@ test('案内の色なしは継承で上書きされず、プレビューと設�
 });
 
 test('すべての投稿モードで共通の規約リンクをボタン直下に置き、補足offでも消さない',()=>{
-  for(const preset of ['chat','image','upload','request'] as const){
+  for(const preset of ['chat','image','upload'] as const){
     const config=resolveConfig(defaults,{...presetOverrides(preset),panel:{metadata:false,footer:'任意の補足'}});
     const children=panel(config).toJSON().components;
     const buttons=children.findIndex(component=>component.type===ComponentType.ActionRow);

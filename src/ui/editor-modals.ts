@@ -9,6 +9,7 @@ export function editorModal(id: string, action: string, config: Config): ModalBu
   const modal = new ModalBuilder().setCustomId(`edit:${id}:${action}`).setTitle(titles[action] ?? '設定を編集');
   const toggle=(name:string,label:string,on:boolean)=>choice(name,label,on?'on':'off',[{label:'有効',value:'on'},{label:'無効',value:'off'}]);
   switch (action) {
+    case 'restrictionrelease': modal.setTitle('このチャンネルの利用停止を解除').addLabelComponents(input('userId','解除するユーザーのDiscord ID','',20));break;
     case 'urlcleanup': modal.addLabelComponents(choice('cleanUrls','全サイトの既知の計測情報・Xの共有情報',config.policy.cleanUrls !== false ? 'on' : 'off',[{label:'除去する',value:'on',description:'utm_*などを除去。検索条件・画像形式・既知の署名付きURLは維持します。'},{label:'除去しない',value:'off',description:'入力されたURLの共有・計測パラメーターを残します。'}]));break;
     case 'references': modal.addLabelComponents(toggle('linkReferences','本文の >>番号 を投稿リンクに変換',config.policy.linkReferences !== false));break;
     case 'display': modal.addLabelComponents(toggle('repost','匿名・通常投稿ごとに案内を再送',config.panel.repost!==false),choice('urlAutoLabel','URLボタンの名前の決め方',automaticUrlLabel(config)?'on':'off',[{label:'許可したSNS名に合わせる',value:'on',description:'例：Xだけを許可すると「XのURL」になります。'},{label:'設定したボタン名を使う',value:'off',description:'「ボタン設定」で入力した名前（例：URLから画像送信）をそのまま使います。'}]));break;

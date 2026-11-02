@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { UserError } from './errors.js';
+import { upgradeCommonSettings } from '../migration/common.js';
 
 export const snowflake = z.string().regex(/^\d{17,20}$/, 'DiscordのIDを指定してください。');
 const publicUrl = z.string().max(1000).refine(value => {
@@ -28,7 +29,7 @@ export const contentSchema = z.object({
   maxFileMB: z.number().int().min(1).max(25),
   providers: z.array(z.enum(['x', 'pixiv', 'direct', 'bluesky', 'mastodon', 'misskey', 'tiktok', 'instagram', 'threads'])).max(9),
 }).strict();
-export const identitySchema = z.object({ showId: z.boolean(), minutes: z.number().int().min(0).max(1440), kind:z.enum(['chat','request']).optional() }).strict();
+export const identitySchema = z.object({ showId: z.boolean(), minutes: z.number().int().min(0).max(1440) }).strict();
 export const policySchema = z.object({
   rules: z.string().max(2500), rulesUrl: publicUrl,
   cooldown: z.number().int().min(0).max(3600),
@@ -46,6 +47,7 @@ export const policySchema = z.object({
 }).strict();
 export const moderationSchema = z.object({
   allowDirectPosts: z.boolean().optional(),
+  allowChannelRestriction: z.boolean().optional(),
   managerRoles: z.array(snowflake).max(20), reportChannel: snowflake.nullable(),
   logChannel: snowflake.nullable(), reportThreshold: z.number().int().min(1).max(50),
 }).strict();
@@ -70,8 +72,7 @@ export const overridesSchema = z.object({
 export type Config = z.infer<typeof configSchema>;
 export type Overrides = z.infer<typeof overridesSchema>;
 export type Provider = Config['content']['providers'][number];
-export function allowsDirectPosts(config: Config): boolean { return config.moderation.allowDirectPosts ?? !config.identity.showId; }
-export function isRequestMode(config:Config):boolean{return config.identity.kind?config.identity.kind==='request':!config.identity.showId;}
+export function allowsDirectPosts(config: Config): boolean { return config.moderation.allowDirectPosts ?? false; }
 export function retentionLabel(days: number|null): string { return days===null?'無期限':days===0?'保存しない':`${days}日`; }
 export function parseRetention(value: string): number|null {
   if (/^(無限|無期限|infinity)$/i.test(value.trim()))return null;
@@ -89,7 +90,7 @@ export function urlMethodLabel(config: Config): string {
   const suffix = names.at(-1)==='画像URL' ? '' : 'のURL';
   return base.length + suffix.length <= 45 ? `${base}${suffix}` : base;
 }
-export const presetNames = { chat: '匿名チャット', image: '匿名画像', upload: '画像アップロード専用', request: '匿名要望' } as const;
+export const presetNames = { chat: '匿名チャット', image: '匿名画像', upload: '画像アップロード専用' } as const;
 export type Preset = keyof typeof presetNames;
 
 export function defaultPanelDescription(content: Pick<Config['content'], 'text' | 'images' | 'urls'>): string {
@@ -110,11 +111,11 @@ export const defaults: Config = {
     textStyle: 'primary', imageStyle: 'success', urlStyle: 'danger', textEmoji: '✍️', imageEmoji: '🖼️', urlEmoji: '📎', urlAutoLabel: false },
   content: { text: true, images: true, urls: true, caption: true, animation: false, video: false,
     maxFiles: 10, maxFileMB: 10, providers: ['x', 'pixiv', 'direct', 'bluesky', 'mastodon', 'misskey', 'tiktok', 'instagram', 'threads'] },
-  identity: { showId: true, minutes: 20, kind:'chat' },
+  identity: { showId: true, minutes: 20 },
   policy: { rules: 'サーバーのルールに従ってご利用ください。',
     rulesUrl: '', cooldown: 5, postsPerMinute: 5, charsPerMinute: 3000, charsPerFiveMinutes: 9000, spamTimeoutMinutes: 10, duplicateSeconds: 300,
     cleanUrls: true, linkReferences: true, blockedWords: [], blockedDomains: [], allowedRoles: [], retentionDays: null, reportRetentionDays: null },
-  moderation: { managerRoles: [], reportChannel: null, logChannel: null, reportThreshold: 3, allowDirectPosts: false },
+  moderation: { managerRoles: [], reportChannel: null, logChannel: null, reportThreshold: 3, allowDirectPosts: false, allowChannelRestriction: false },
 };
 
 export function resolveConfig(base: Config, overrides: Overrides): Config {
@@ -127,14 +128,16 @@ export function presetOverrides(preset: Preset): Overrides {
   const content = { ...defaults.content };
   if (preset === 'image' || preset === 'upload') content.text = false;
   if (preset === 'upload') { content.urls = false; content.caption = false; }
-  if (preset === 'request') content.urls = false;
-  return { panel: { ...defaults.panel, title: presetNames[preset], description: defaultPanelDescription(content) }, content, identity: { ...defaults.identity, showId: preset !== 'request',kind:preset==='request'?'request':'chat' }, moderation: { allowDirectPosts: preset === 'request' } };
+  return { panel: { ...defaults.panel, title: presetNames[preset], description: defaultPanelDescription(content) }, content, identity: { ...defaults.identity }, moderation: { allowDirectPosts: false } };
 }
 
 export function importTemplate(input: unknown, base: Config): Overrides {
-  const template = z.object({ version: z.literal(1), settings: overridesSchema }).strict().parse(input);
-  resolveConfig(base, template.settings);
-  return template.settings;
+  const template = z.object({ version: z.literal(1), settings: z.unknown() }).strict().parse(input);
+  const identity=template.settings && typeof template.settings==='object' && 'identity' in template.settings ? template.settings.identity : undefined;
+  const converted=identity && typeof identity==='object' && 'kind' in identity ? upgradeCommonSettings(template.settings,base) : template.settings;
+  const settings=overridesSchema.parse(converted);
+  resolveConfig(base, settings);
+  return settings;
 }
 
 export function exportTemplate(settings: Overrides): string {

@@ -18,6 +18,7 @@ export interface EditorSession extends OwnedSession {
   reuseSource?: string;
   pendingRevision?: Config | Overrides;
   backups?: SettingsBackup[];
+  backupCursors?: string[];
   selectedBackup?: string;
   deletingBackup?: boolean;
   returnToOther?: boolean;
@@ -45,8 +46,8 @@ export function editorView(id: string, session: EditorSession): ContainerBuilder
     { label: 'テキストだけの投稿', value: 'text', description: '画像なしでも投稿できる' },
     { label: 'ファイルの直接添付', value: 'images', description: 'フォームから画像や動画などを選択できる' },
     { label: 'URLから画像を取得', value: 'urls', description: '対応サイトの画像や動画を自動変換する' },
-    { label: '画像に説明文を添える', value: 'caption', description: '無効にすると説明文欄・編集ボタンを表示しない' },
-    ].map(option => ({ ...option, default: config.content[option.value as 'text' | 'images' | 'urls' | 'caption'] }));
+    { label: '画像に説明文を加えない', value: 'noCaption', description: '選択すると説明文の入力・編集を禁止する' },
+    ].map(option => ({ ...option, default: option.value === 'noCaption' ? !config.content.caption : config.content[option.value as 'text' | 'images' | 'urls'] }));
   menu.addActionRowComponents(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder()
     .setCustomId(`cfg:${id}:content`).setPlaceholder('追加したい機能を選ぶ').setMinValues(1).setMaxValues(options.length).addOptions(options)));
   if (config.content.urls) addProviders(menu, id, config);
@@ -66,8 +67,9 @@ export function otherView(id: string, session: EditorSession): ContainerBuilder[
     ['identity','匿名ID・保存期間',`匿名ID：${config.identity.showId ? '表示' : '非表示'} / 投稿ログ：${retentionLabel(policy.retentionDays)}`,'IDの保持時間と、投稿・通報ログの保存期間を設定します。'],
     ['urlcleanup','URLの不要な情報',policy.cleanUrls !== false ? '除去：有効' : '除去：無効','全サイトの既知の計測情報（utm_*等）とX投稿の共有情報を除去します。検索条件・画像形式・既知の署名付きURLは維持します。'],
     ['references','投稿番号の自動リンク',policy.linkReferences !== false ? '自動リンク：有効' : '自動リンク：無効','本文の >>番号 を保存済みの投稿へのリンクにします。投稿ログを保存しない場合は変換しません。'],
+    ['restrictionview','匿名投稿の利用停止',config.moderation.allowChannelRestriction ? '通報からの利用停止：有効' : '通報からの利用停止：無効','通報からこのチャンネルだけの利用を無期限停止できます。利用停止の解除もここで行います。'],
     ['display','表示・再送','案内の再送・URLボタン名','投稿後に案内を再送するか、URLボタン名を許可したSNS名に合わせるかを設定します。'],
-    ['restore','設定バックアップ','サーバー全体で最新8件','保存時の設定を自動で保持し、9件目から古い順に削除します。読み込みは下書きに反映し、手動削除には確認が必要です。'],
+    ['restore','設定バックアップ','保存から60日間・件数制限なし','保存時の設定を自動で保持し、保存から60日以上たつと削除します。読み込みは下書きに反映し、手動削除には確認が必要です。'],
   ] as const;
   for (const [action,title,current,description] of entries) {
     menu.addSeparatorComponents(new SeparatorBuilder());
@@ -76,6 +78,16 @@ export function otherView(id: string, session: EditorSession): ContainerBuilder[
   menu.addSeparatorComponents(new SeparatorBuilder());
   menu.addActionRowComponents(row(button(`cfg:${id}:back`, '設定に戻る', ButtonStyle.Primary)));
   return [menu];
+}
+
+export function channelRestrictionView(id:string,session:EditorSession,note=''):ContainerBuilder[]{
+  const config=editorConfig(session),enabled=!!config.moderation.allowChannelRestriction;
+  return [card('匿名投稿の利用停止',`通報からの利用停止：**${enabled?'有効':'無効'}**\nこのチャンネルだけの匿名投稿を無期限停止します。投稿・通報ログの保存が必要です。BAN・タイムアウトや投稿削除は行いません。${note?`\n${note}`:''}`,colors.settings)
+    .addSeparatorComponents(new SeparatorBuilder())
+    .addSectionComponents(new SectionBuilder().addTextDisplayComponents(text('### 通報から利用停止する\n有効にすると通報画面に操作ボタンを表示します。変更は設定を保存するまで下書きです。無効にしても既存の利用停止は解除されません。')).setButtonAccessory(button(`cfg:${id}:channelrestriction`,enabled?'無効にする':'有効にする')))
+    .addSeparatorComponents(new SeparatorBuilder())
+    .addSectionComponents(new SectionBuilder().addTextDisplayComponents(text('### 利用停止を解除する\n対象ユーザーのDiscord IDを指定します。解除は送信直後に反映されます。')).setButtonAccessory(button(`cfg:${id}:restrictionrelease`,'解除する')))
+    .addActionRowComponents(row(button(`cfg:${id}:other`,'その他の設定に戻る')))];
 }
 
 export function setupView(id: string, session: EditorSession): ContainerBuilder[] {
@@ -148,15 +160,17 @@ export function reuseSetupView(id: string, session: EditorSession): ContainerBui
 }
 
 export function backupsView(id: string, session: EditorSession): ContainerBuilder[] {
-  const backups = (session.backups ?? []).slice(0,8);
-  const menu = card('設定バックアップ', 'サーバー全体で最新8件を自動保存します。保存して反映するたびに追加し、古いものから削除します。操作できる保存元の設定だけ表示します。', colors.settings);
+  const backups = (session.backups ?? []).slice(0,25);
+  const page = session.backupCursors?.length ?? 0;
+  const menu = card('設定バックアップ', `保存から60日間、件数制限なしで保持します。60日以上たつと自動削除します。操作できる保存元の設定だけ表示します。\n${page + 1}ページ目`, colors.settings);
   menu.addSeparatorComponents(new SeparatorBuilder());
   if (backups.length) menu.addActionRowComponents(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(new StringSelectMenuBuilder()
     .setCustomId(`cfg:${id}:restoreselect`).setPlaceholder('日時からバックアップを選ぶ').addOptions(backups.map(backup => ({
       label: backup.channelName.slice(0,100), value: backup.id,
       description: new Date(backup.createdAt).toLocaleString('ja-JP',{timeZone:'Asia/Tokyo',hour12:false}), default: backup.id === session.selectedBackup,
     })))));
-  else menu.addTextDisplayComponents(text('バックアップはありません。設定を保存すると自動で作成されます。'));
+  else menu.addTextDisplayComponents(text(page ? 'このページにバックアップはありません。「前のページ」で戻れます。' : '60日以内のバックアップはありません。設定を保存すると自動で作成されます。'));
+  if (page || (session.backups?.length ?? 0)>25) menu.addActionRowComponents(row(button(`cfg:${id}:restoreprev`,'前のページ').setDisabled(!page),button(`cfg:${id}:restorenext`,'次のページ').setDisabled((session.backups?.length ?? 0)<=25)));
   if (session.pendingRevision) {
     menu.addTextDisplayComponents(text(session.deletingBackup ? '**選択中のバックアップを削除しますか？**\n削除は取り消せません。公開中の設定は変わりません。' : '上のプレビューの設定を下書きに読み込めます。保存して反映するまで公開中の設定は変わりません。'));
     menu.addActionRowComponents(session.deletingBackup

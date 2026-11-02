@@ -27,7 +27,7 @@ export class IdentityPrivacy {
       JOIN v2_posts p USING(operation_id) WHERE a.user_id NOT LIKE 'h1:%' FOR UPDATE OF a`)).rows;
     for (const row of authors) await client.query('UPDATE v2_authors SET user_id=$2,user_ciphertext=$3 WHERE operation_id=$1',
       [row.operation_id, this.key(row.guild_id, row.user_id), this.seal(row.user_id)]);
-    for (const table of ['v2_sessions', 'v2_restrictions', 'v2_request_restrictions']) {
+    for (const table of ['v2_sessions', 'v2_restrictions', 'v2_channel_restrictions']) {
       const rows = (await client.query(`SELECT guild_id,user_id FROM ${table} WHERE user_id NOT LIKE 'h1:%' FOR UPDATE`)).rows;
       for (const row of rows) await client.query(`UPDATE ${table} SET user_id=$3 WHERE guild_id=$1 AND user_id=$2`, [row.guild_id, row.user_id, this.key(row.guild_id, row.user_id)]);
     }

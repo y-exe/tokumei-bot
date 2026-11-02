@@ -6,7 +6,7 @@ import {
 import { ZodError } from 'zod';
 import { isBotAdmin } from './domain/permissions.js';
 import { isPostingChannel, type PostingChannel } from './domain/channels.js';
-import { defaults, defaultPanelDescription, isDefaultPanelDescription, exportTemplate, importTemplate, presetOverrides, resolveConfig, parseRetention, allowsDirectPosts,isRequestMode, type Config } from './domain/config.js';
+import { defaults, defaultPanelDescription, isDefaultPanelDescription, exportTemplate, importTemplate, presetOverrides, resolveConfig, parseRetention, allowsDirectPosts, type Config } from './domain/config.js';
 import { UserError, MediaSafetyError, BlockedWordError, FloodControlError, errorMessage } from './domain/errors.js';
 import { maskBlockedWords } from './domain/blocked-words.js';
 import { mediaBytes, validateText, type PostInput } from './domain/validation.js';
@@ -16,7 +16,7 @@ import type { MediaService } from './media/service.js';
 import { Posting } from './services/posting.js';
 import { Panels } from './services/panels.js';
 import { button, card, colors, help, panelPayload, payload, row, text } from './ui/components.js';
-import { editSection, editorConfig, editorModal, editorView, setupView, reuseSetupView, backupsView, resetConfirmationView, resumeConfirmationView, otherView, managementView, buttonSettingsView, safetyView, type EditorSession } from './ui/editor.js';
+import { editSection, editorConfig, editorModal, editorView, setupView, reuseSetupView, backupsView, resetConfirmationView, resumeConfirmationView, otherView, channelRestrictionView, managementView, buttonSettingsView, safetyView, type EditorSession } from './ui/editor.js';
 import { input, postModal } from './ui/modals.js';
 import { previewView, type PreviewSession } from './ui/post.js';
 import { Sessions } from './ui/sessions.js';
@@ -70,7 +70,7 @@ export class App {
     throw new UserError('サーバー管理権限、または設定された管理ロールが必要です。');
   }
   async backupSource(interaction: UIInteraction, session: EditorSession, id: string) {
-    const backup = session.backups?.find(item => item.id === id);
+    const backup = session.backups?.slice(0,25).find(item => item.id === id);
     if (!backup) throw new UserError('一覧にあるバックアップを選択してください。');
     if (backup.channelId === null) {
       if (!isBotAdmin(interaction.user.id) && !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) throw new UserError('サーバー標準のバックアップにはサーバー管理権限が必要です。');
@@ -222,6 +222,17 @@ export class App {
   async auditPanels(): Promise<void> {
     for (const { guildId, channelId } of await this.store.configuredPanels()) {
       await this.panels.restore(guildId, channelId).catch(() => console.error(`起動時の案内確認に失敗しました(チャンネル:${channelId})`));
+    }
+  }
+  async refreshReportNotices(guildId?:string,channelId?:string):Promise<void>{
+    for await(const notice of this.store.openReportNotices(guildId,channelId)){
+      try{
+        const settings=await this.store.settings(notice.guild_id,notice.channel_id,true);
+        if(!settings.config.moderation.reportChannel)continue;
+        const detail=await this.store.reportDetail(notice.guild_id,notice.channel_id,notice.message_id);if(!detail)continue;
+        const destination=await this.channel(notice.guild_id,settings.config.moderation.reportChannel);
+        await destination.messages.edit(notice.notification_id,{content:null,embeds:[],components:[reportView(detail,!!settings.config.moderation.allowChannelRestriction)],flags:MessageFlags.IsComponentsV2,allowedMentions:emptyMentions});
+      }catch{console.error('保存済みの通報案内を更新できませんでした。');}
     }
   }
   async send(interaction: UIInteraction, content: string, media: PostInput['media'], source?: string, replyTo?: string, videoLinks?: string[]): Promise<void> {
@@ -383,7 +394,7 @@ export class App {
       const detail=await this.store.reportDetail(interaction.guildId!,interaction.channelId!,report.message_id);
       if(!detail)throw new UserError('この通報は対応済みか保存期限を過ぎています。');
       const settings=await this.store.settings(interaction.guildId!,interaction.channelId!,true);
-      const view=reportView(detail,isRequestMode(settings.config));
+      const view=reportView(detail,!!settings.config.moderation.allowChannelRestriction);
       await interaction.update({ components: [view], allowedMentions: emptyMentions }); return;
     }
     if(prefix==='punish'&&id&&action){
@@ -442,20 +453,28 @@ export class App {
         if (!session.selectedBackup || !session.pendingRevision) throw new UserError('設定バックアップの確認画面から選択してください。');
         const backup = await this.backupSource(interaction,session,session.selectedBackup);
         const saved = await this.store.settingsBackup(session.guildId,backup.channelId,session.selectedBackup);
-        if (!saved) throw new UserError('このバックアップは削除されています。一覧を開き直してください。');
+        if (!saved) throw new UserError('バックアップは削除済みか、保存期限切れです。一覧を開き直してください。');
         editorConfig({...session,value:saved}); session.value = saved;
         session.pendingRevision = undefined; session.selectedBackup = undefined; session.deletingBackup = false;
         session.choosingSetup = false;
         if (session.setupPage !== undefined || session.installing && !session.resuming) session.setupPage = 2;
         await interaction.update({components:session.setupPage !== undefined ? setupView(id,session) : session.returnToOther ? otherView(id,session) : editorView(id,session),allowedMentions:emptyMentions}); return;
       }
-      if (action === 'restore') { session.selectedBackup = undefined; session.pendingRevision = undefined; session.deletingBackup = false; }
+      if (action === 'restore') { session.backupCursors = []; session.selectedBackup = undefined; session.pendingRevision = undefined; session.deletingBackup = false; }
+      else if (action === 'restoreprev' || action === 'restorenext') {
+        session.backupCursors ??= [];
+        if (action === 'restorenext') {
+          if ((session.backups?.length ?? 0)<=25) throw new UserError('次のページはありません。');
+          session.backupCursors.push(session.backups![24]!.id);
+        } else session.backupCursors.pop();
+        session.selectedBackup = undefined; session.pendingRevision = undefined; session.deletingBackup = false;
+      }
       else if (action === 'restoreselect' && interaction.isStringSelectMenu()) {
         const selected = interaction.values[0];
         if (!selected) throw new UserError('一覧にあるバックアップを選択してください。');
         const backup = await this.backupSource(interaction,session,selected);
         const saved = await this.store.settingsBackup(session.guildId,backup.channelId,selected);
-        if (!saved) throw new UserError('このバックアップは削除されています。一覧を開き直してください。');
+        if (!saved) throw new UserError('バックアップは削除済みか、保存期限切れです。一覧を開き直してください。');
         editorConfig({...session,value:saved}); session.selectedBackup = selected; session.pendingRevision = saved; session.deletingBackup = false;
       } else if (action === 'restoredelete' || action === 'restoredeleteconfirm' || action === 'restoredeletecancel') {
         if (!session.selectedBackup || !session.pendingRevision) throw new UserError('先に削除するバックアップを選択してください。');
@@ -466,7 +485,7 @@ export class App {
           session.pendingRevision = undefined; session.selectedBackup = undefined; session.deletingBackup = false;
         } else session.deletingBackup = action === 'restoredelete';
       } else throw new UserError('設定バックアップの一覧を開き直してください。');
-      session.backups = await this.store.settingsBackups(session.guildId,this.setupSourceRoles(interaction));
+      session.backups = await this.store.settingsBackups(session.guildId,this.setupSourceRoles(interaction),session.backupCursors?.at(-1));
       await interaction.update({components:backupsView(id,session),allowedMentions:emptyMentions}); return;
     }
     if (['newsetup','reusesource','reuseapply','reuseedit','reuseprev','reusenext'].includes(action)) {
@@ -527,7 +546,7 @@ export class App {
       const automaticDescription = isDefaultPanelDescription(editorConfig(session).panel.description);
       editSection(session, 'content', {
         text: interaction.values.includes('text'), images: interaction.values.includes('images'), urls: interaction.values.includes('urls'),
-        caption: interaction.values.includes('caption'),
+        caption: !interaction.values.includes('noCaption'),
       });
       if (automaticDescription) editSection(session, 'panel', { description: defaultPanelDescription(editorConfig(session).content) });
     }
@@ -540,7 +559,9 @@ export class App {
     else if (action === 'export') {
       await interaction.reply({ content: 'この下書きの設定です。Webhookなどの秘密情報は含まれません。', flags: MessageFlags.Ephemeral,
         files: [new AttachmentBuilder(Buffer.from(exportTemplate(session.value)), { name: 'anonymous.json' })] }); return;
-    } else if (!['back', 'management','toolsview','panelpreview','other','buttons','safetyview','limits','providersview','advanced'].includes(action)) { await interaction.showModal(editorModal(id, action, editorConfig(session))); return; }
+    } else if (!['back', 'management','toolsview','panelpreview','other','restrictionview','channelrestriction','buttons','safetyview','limits','providersview','advanced'].includes(action)) { await interaction.showModal(editorModal(id, action, editorConfig(session))); return; }
+    if(action==='channelrestriction')editSection(session,'moderation',{allowChannelRestriction:!editorConfig(session).moderation.allowChannelRestriction});
+    if(action==='channelrestriction'||action==='restrictionview'){await interaction.update({components:channelRestrictionView(id,session),allowedMentions:emptyMentions});return;}
     if (session.setupPage !== undefined) {
       await interaction.update({ components: setupView(id, session), allowedMentions: emptyMentions }); return;
     }
@@ -587,6 +608,7 @@ export class App {
         if (settings.panelId) await destination.messages.delete(settings.panelId).catch(() => undefined);
       } catch { failed.push(channelId); }
     }
+    if(config.moderation.allowChannelRestriction!==session.original.config.moderation.allowChannelRestriction)await this.refreshReportNotices(session.guildId,session.scope==='channel'?session.channelId:undefined).catch(()=>console.error('設定変更後の通報案内更新に失敗しました。'));
     this.editors.delete(id);
     await this.respond(interaction, [card(failed.length ? '設定は保存しました' : '設定を反映しました', failed.length ?
       `案内の更新に失敗したチャンネル: ${failed.map(channelId => `<#${channelId}>`).join(' ')}\n権限を確認し、/setup または /settings から再反映してください。` :
@@ -625,13 +647,13 @@ export class App {
       const result=await this.moderation.execute(guild,channelId,id,interaction.user.id,action as Punishment,reason);
       const settings=await this.store.settings(interaction.guildId!,channelId,true);let warning=result.warning;
       if(result.report.notificationId&&settings.config.moderation.reportChannel){
-        try{const destination=await this.channel(interaction.guildId!,settings.config.moderation.reportChannel);await destination.messages.edit(result.report.notificationId,{content:null,embeds:[],components:[reportView(result.report,isRequestMode(settings.config),punishmentLabels[action as Punishment])],flags:MessageFlags.IsComponentsV2,allowedMentions:emptyMentions});}
+        try{const destination=await this.channel(interaction.guildId!,settings.config.moderation.reportChannel);await destination.messages.edit(result.report.notificationId,{content:null,embeds:[],components:[reportView(result.report,!!settings.config.moderation.allowChannelRestriction,punishmentLabels[action as Punishment])],flags:MessageFlags.IsComponentsV2,allowedMentions:emptyMentions});}
         catch{warning+='\n対応は記録済みですが、通報通知の表示を更新できませんでした。';}
       }
       if(action!=='none'&&settings.config.moderation.logChannel){
-        const punishment=action==='ban'?'サーバーBANを実施しました。':action==='timeout'?'一か月タイムアウトを実施しました。':'匿名要望の使用権を永久に剥奪しました。';
-        const removal=action==='revoke'?'':result.warning?'\n(対象メッセージを自動削除できませんでした)':'\n(対象メッセージは自動削除されています)';
-        const content=`❌匿名つぶやき処罰通知❌\n\n対象番号：匿名${String(result.report.anonymousId).padStart(3,'0')}\n処罰理由：${reason || '未記入'}\n${punishment}\n元メッセージ：[匿名つぶやき](https://discord.com/channels/${interaction.guildId}/${channelId}/${id})${removal}`;
+        const punishment=action==='ban'?'サーバーBANを実施しました。':action==='timeout'?'一か月タイムアウトを実施しました。':'匿名投稿の利用をこのチャンネルで無期限停止しました。';
+        const removal=action==='restrict'?'':result.warning?'\n(対象メッセージを自動削除できませんでした)':'\n(対象メッセージは自動削除されています)';
+        const content=`**❌匿名つぶやき処罰通知❌**\n\n**対象番号：**匿名${String(result.report.anonymousId).padStart(3,'0')}\n**処罰理由：**${reason || '未記入'}\n${punishment}\n**元メッセージ：**[匿名つぶやき](https://discord.com/channels/${interaction.guildId}/${channelId}/${id})${removal}`;
         try{const destination=await this.channel(interaction.guildId!,settings.config.moderation.logChannel);await destination.send({content,allowedMentions:emptyMentions});}
         catch{warning+='\n処罰ログを送信できませんでした。';}
       }
@@ -648,6 +670,13 @@ export class App {
       const copy = structuredClone(session);
       if (session.resumeConfirmation) throw new UserError('先に匿名投稿の再開を確認してください。');
       switch (action) {
+        case 'restrictionrelease': {
+          const userId=field('userId').trim();if(!/^[1-9]\d{16,19}$/.test(userId))throw new UserError('ユーザーのDiscord IDを指定してください。');
+          await this.store.releaseChannelRestriction(session.guildId,session.channelId,userId,interaction.user.id);
+          const view=channelRestrictionView(id,session,'利用停止を解除しました。');
+          if(interaction.isFromMessage())await interaction.update({components:view,allowedMentions:emptyMentions});
+          else await this.respond(interaction,view);return;
+        }
         case 'display': {
           const repost = selected('repost').trim().toLowerCase();
           const urlAutoLabel=selected('urlAutoLabel').trim().toLowerCase();
@@ -778,7 +807,7 @@ export class App {
         const detail=await this.store.reportDetail(interaction.guildId!,interaction.channelId!,messageId);
         if(detail?.notificationId){
           const destination=await this.channel(interaction.guildId!,settings.config.moderation.reportChannel);
-          await destination.messages.edit(detail.notificationId,{content:null,embeds:[],components:[reportView(detail,isRequestMode(settings.config))],flags:MessageFlags.IsComponentsV2,allowedMentions:emptyMentions});
+          await destination.messages.edit(detail.notificationId,{content:null,embeds:[],components:[reportView(detail,!!settings.config.moderation.allowChannelRestriction)],flags:MessageFlags.IsComponentsV2,allowedMentions:emptyMentions});
         }
       } catch (error) {
         throw new UserError('通報は保存しました。管理者への通知に失敗したため、5分後に再試行します。');
@@ -795,7 +824,7 @@ export class App {
     try {
       const destination = await this.channel(guildId, settings.config.moderation.reportChannel);
       const detail=await this.store.reportDetail(guildId,channelId,messageId);
-      const notification=reportView(detail??notice,isRequestMode(settings.config));
+      const notification=reportView(detail??notice,!!settings.config.moderation.allowChannelRestriction);
       const sent = await destination.send({ ...payload([notification], false), nonce: notice.nonce, enforceNonce: true });
       await this.store.reportNotification(guildId, messageId, token, sent.id);
     } catch (error) {

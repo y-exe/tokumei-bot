@@ -1,6 +1,7 @@
 import { Pool, type PoolClient } from 'pg';
 import { randomUUID } from 'node:crypto';
-import { configSchema, defaults, overridesSchema, resolveConfig,isRequestMode, type Config, type Overrides } from '../domain/config.js';
+import { configSchema, defaults, overridesSchema, resolveConfig, type Config, type Overrides } from '../domain/config.js';
+import { migrateCommonSettings } from './common-settings-migration.js';
 import { UserError, FloodControlError } from '../domain/errors.js';
 import { nextAvatar } from '../domain/avatar.js';
 import { floodDecision, type FloodEvent, type FloodState } from '../domain/flood-control.js';
@@ -56,7 +57,8 @@ ALTER TABLE v2_revisions ADD COLUMN IF NOT EXISTS snapshot boolean NOT NULL DEFA
 ALTER TABLE v2_revisions ADD COLUMN IF NOT EXISTS channel_name text;
 CREATE INDEX IF NOT EXISTS v2_revisions_scope ON v2_revisions(guild_id,channel_id,id DESC);
 CREATE INDEX IF NOT EXISTS v2_revisions_guild ON v2_revisions(guild_id,id DESC);
-DELETE FROM v2_revisions WHERE id IN (SELECT id FROM (SELECT id,row_number() OVER(PARTITION BY guild_id ORDER BY id DESC) AS position FROM v2_revisions) ranked WHERE position>8);
+CREATE INDEX IF NOT EXISTS v2_revisions_created ON v2_revisions(created_at);
+DELETE FROM v2_revisions WHERE created_at<=now()-interval '60 days';
 CREATE TABLE IF NOT EXISTS v2_counters (
   channel_id text PRIMARY KEY, counter integer NOT NULL DEFAULT 0, last_user text
 );
@@ -93,9 +95,10 @@ CREATE TABLE IF NOT EXISTS v2_restrictions (
   guild_id text NOT NULL, user_id text NOT NULL, expires_at timestamptz, reason text NOT NULL,
   PRIMARY KEY(guild_id, user_id)
 );
-CREATE TABLE IF NOT EXISTS v2_request_restrictions (
-  guild_id text NOT NULL,user_id text NOT NULL,reason text NOT NULL,created_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(guild_id,user_id)
+CREATE TABLE IF NOT EXISTS v2_channel_restrictions (
+  guild_id text NOT NULL,channel_id text NOT NULL,user_id text NOT NULL,reason text NOT NULL,created_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(guild_id,channel_id,user_id)
 );
+CREATE TABLE IF NOT EXISTS v2_migrations(name text PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS v2_actions (
   id bigserial PRIMARY KEY, guild_id text NOT NULL, actor_id text NOT NULL,
   action text NOT NULL, message_id text, created_at timestamptz NOT NULL DEFAULT now()
@@ -129,9 +132,13 @@ export class Store {
   openIdentity(userId: string, ciphertext?: string | null): string { return this.identities?.open(userId, ciphertext) ?? userId; }
   async initialize(): Promise<void> {
     await this.pool.query(schema); await this.pool.query(reportRetrySchema);
-    if (this.identities) await this.transaction(client => this.identities!.migrate(client));
-    else if ((await this.pool.query('SELECT 1 FROM v2_identity_keys LIMIT 1')).rowCount) throw new Error('保護済みDBには既存の暗号鍵を指定してください。');
+    await this.transaction(async client => {
+      await migrateCommonSettings(client);
+      if (this.identities) await this.identities.migrate(client);
+      else if ((await client.query('SELECT 1 FROM v2_identity_keys LIMIT 1')).rowCount) throw new Error('保護済みDBには既存の暗号鍵を指定してください。');
+    });
     await this.transaction(client => this.blockUnloggedLegacy(client));
+    this.cache.clear();
   }
   private async blockUnloggedLegacy(client: Pick<Pool, 'query'>): Promise<void> {
     await client.query(`INSERT INTO v2_legacy_lookup_blocks(channel_id)
@@ -143,12 +150,12 @@ export class Store {
     if (rows.length) await client.query('INSERT INTO v2_legacy_lookup_denials(message_key) SELECT unnest($1::text[]) ON CONFLICT DO NOTHING',
       [rows.map(row => this.identityKey('legacy-lookup-message', row.message_id))]);
   }
-  async checkRestrictions(guildId: string, userId: string, requestMode: boolean): Promise<void> {
+  async checkRestrictions(guildId: string, userId: string, channelId: string): Promise<void> {
     const key = this.identityKey(guildId, userId);
     if ((await this.pool.query('SELECT 1 FROM v2_restrictions WHERE guild_id=$1 AND user_id=$2 AND (expires_at IS NULL OR expires_at>now())', [guildId, key])).rowCount)
       throw new UserError('このサーバーでは匿名投稿の利用が制限されています。');
-    if (requestMode && (await this.pool.query('SELECT 1 FROM v2_request_restrictions WHERE guild_id=$1 AND user_id=$2', [guildId, key])).rowCount)
-      throw new UserError('このサーバーでは匿名要望の使用権が剥奪されています。');
+    if ((await this.pool.query('SELECT 1 FROM v2_channel_restrictions WHERE guild_id=$1 AND channel_id=$2 AND user_id=$3', [guildId,channelId,key])).rowCount)
+      throw new UserError('このチャンネルでは匿名投稿の利用が停止されています。');
   }
   async close(): Promise<void> { await this.pool.end(); }
   async checkFlood(subject: string, input: Omit<FloodEvent, 'at'>, policy: Config['policy'], consume = false): Promise<void> {
@@ -220,7 +227,7 @@ export class Store {
         await client.query('INSERT INTO v2_revisions(guild_id,channel_id,config,actor_id,snapshot,channel_name) VALUES($1,$2,$3,$4,true,$5)', [previous.guildId, previous.channelId, resolveConfig(previous.base, parsed as Overrides), actor, channelName?.slice(0,100) ?? channel.channel_name]);
         await client.query('UPDATE v2_channels SET overrides=$3,version=version+1,channel_name=COALESCE($4,channel_name),settings_saved_at=now() WHERE guild_id=$1 AND channel_id=$2', [previous.guildId, previous.channelId, parsed, channelName?.slice(0,100) ?? null]);
       }
-      await client.query('DELETE FROM v2_revisions WHERE guild_id=$1 AND id NOT IN (SELECT id FROM v2_revisions WHERE guild_id=$1 ORDER BY id DESC LIMIT 8)',[previous.guildId]);
+      await client.query("DELETE FROM v2_revisions WHERE guild_id=$1 AND created_at<=now()-interval '60 days'",[previous.guildId]);
       const base=(await client.query('SELECT config FROM v2_guilds WHERE guild_id=$1',[previous.guildId])).rows[0].config;
       const channels=(await client.query('SELECT channel_id,overrides FROM v2_channels WHERE guild_id=$1',[previous.guildId])).rows;
       for(const channel of channels){
@@ -329,7 +336,7 @@ export class Store {
       if (old) throw new UserError(old.status === 'sent' ? 'この投稿は送信済みです。' : 'この投稿は処理中か送信結果の確認中です。再送せず少しお待ちください。');
       const restriction = (await client.query('SELECT 1 FROM v2_restrictions WHERE guild_id=$1 AND user_id=$2 AND (expires_at IS NULL OR expires_at>now())', [input.guildId, userKey])).rows[0];
       if (restriction) throw new UserError('このサーバーでは匿名投稿の利用が制限されています。');
-      if(isRequestMode(config)&&(await client.query('SELECT 1 FROM v2_request_restrictions WHERE guild_id=$1 AND user_id=$2',[input.guildId,userKey])).rowCount)throw new UserError('このサーバーでは匿名要望の使用権が剥奪されています。');
+      if((await client.query('SELECT 1 FROM v2_channel_restrictions WHERE guild_id=$1 AND channel_id=$2 AND user_id=$3',[input.guildId,input.channelId,userKey])).rowCount)throw new UserError('このチャンネルでは匿名投稿の利用が停止されています。');
       const session = (await client.query('SELECT * FROM v2_sessions WHERE guild_id=$1 AND channel_id=$2 AND user_id=$3', [input.guildId, input.channelId, userKey])).rows[0];
       const now = new Date();
       const age = session ? now.getTime() - new Date(session.last_post).getTime() : Infinity;
@@ -483,29 +490,38 @@ export class Store {
   async releaseReportAction(guildId:string,messageId:string,token:string):Promise<void>{await this.pool.query("UPDATE v2_reports SET status='open',moderation_token=NULL WHERE guild_id=$1 AND message_id=$2 AND moderation_token=$3 AND status='processing'",[guildId,messageId,token]);}
   async finishReportAction(guildId:string,messageId:string,token:string,actor:string,action:string,reason:string,targetUser?:string):Promise<void>{
     await this.transaction(async client=>{
-      if(targetUser)await client.query('INSERT INTO v2_request_restrictions(guild_id,user_id,reason) VALUES($1,$2,$3) ON CONFLICT(guild_id,user_id) DO UPDATE SET reason=$3',[guildId,this.identityKey(guildId,targetUser),reason]);
-      const result=await client.query("UPDATE v2_reports SET status='resolved',moderation_token=NULL WHERE guild_id=$1 AND message_id=$2 AND moderation_token=$3 AND status='processing'",[guildId,messageId,token]);
+      const result=await client.query("UPDATE v2_reports SET status='resolved',moderation_token=NULL WHERE guild_id=$1 AND message_id=$2 AND moderation_token=$3 AND status='processing' RETURNING channel_id",[guildId,messageId,token]);
       if(!result.rowCount)throw new UserError('処罰の実行後に通報履歴を更新できませんでした。再実行せず運用者へ確認してください。');
+      if(targetUser)await client.query('INSERT INTO v2_channel_restrictions(guild_id,channel_id,user_id,reason) VALUES($1,$2,$3,$4) ON CONFLICT(guild_id,channel_id,user_id) DO UPDATE SET reason=$4',[guildId,result.rows[0].channel_id,this.identityKey(guildId,targetUser),reason]);
       await client.query('INSERT INTO v2_actions(guild_id,actor_id,action,message_id,reason) VALUES($1,$2,$3,$4,$5)',[guildId,this.identityKey(guildId,actor),action,messageId,reason]);
+    });
+  }
+  async releaseChannelRestriction(guildId:string,channelId:string,userId:string,actor:string):Promise<void>{
+    await this.transaction(async client=>{
+      const result=await client.query('DELETE FROM v2_channel_restrictions WHERE guild_id=$1 AND channel_id=$2 AND user_id=$3',[guildId,channelId,this.identityKey(guildId,userId)]);
+      if(!result.rowCount)throw new UserError('このチャンネルで、そのユーザーは利用停止されていません。');
+      await client.query("INSERT INTO v2_actions(guild_id,actor_id,action,reason) VALUES($1,$2,'release-channel',$3)",[guildId,this.identityKey(guildId,actor),`対象チャンネル:${channelId}`]);
     });
   }
   async resolveReport(guildId: string, messageId: string, actor: string): Promise<void> {
     await this.pool.query("UPDATE v2_reports SET status='resolved' WHERE guild_id=$1 AND message_id=$2", [guildId, messageId]);
     await this.pool.query("INSERT INTO v2_actions(guild_id,actor_id,action,message_id) VALUES($1,$2,'resolve',$3)", [guildId, this.identityKey(guildId,actor), messageId]);
   }
-  async settingsBackups(guildId: string, roles?: string[]): Promise<SettingsBackup[]> {
+  async settingsBackups(guildId: string, roles?: string[], beforeId?: string): Promise<SettingsBackup[]> {
+    if (beforeId !== undefined && !/^[1-9]\d{0,18}$/.test(beforeId)) return [];
     const result = await this.pool.query(`SELECT r.id::text,r.created_at,r.channel_id,
       CASE WHEN r.channel_id IS NULL THEN 'サーバー標準' ELSE COALESCE(r.channel_name,c.channel_name,'保存元のチャンネル') END AS channel_name
       FROM v2_revisions r JOIN v2_guilds g ON g.guild_id=r.guild_id
       LEFT JOIN v2_channels c ON c.guild_id=r.guild_id AND c.channel_id=r.channel_id
-      WHERE r.guild_id=$1 AND ($2::text[] IS NULL OR (r.channel_id IS NOT NULL AND EXISTS(
+      WHERE r.guild_id=$1 AND r.created_at>now()-interval '60 days' AND ($3::bigint IS NULL OR r.id<$3)
+      AND ($2::text[] IS NULL OR (r.channel_id IS NOT NULL AND EXISTS(
         SELECT 1 FROM jsonb_array_elements_text(COALESCE(c.overrides->'moderation'->'managerRoles',g.config->'moderation'->'managerRoles','[]'::jsonb)) AS role(value) WHERE role.value=ANY($2))))
-      ORDER BY r.id DESC LIMIT 8`, [guildId, roles ?? null]);
+      ORDER BY r.id DESC LIMIT 26`, [guildId, roles ?? null, beforeId ?? null]);
     return result.rows.map(row => ({ id: row.id, createdAt: row.created_at, channelId: row.channel_id, channelName: row.channel_name }));
   }
   async settingsBackup(guildId: string, channelId: string | null, id: string): Promise<Config | Overrides | null> {
     if (!/^[1-9]\d{0,18}$/.test(id)) return null;
-    const row = (await this.pool.query('SELECT config,snapshot FROM v2_revisions WHERE guild_id=$1 AND channel_id IS NOT DISTINCT FROM $2 AND id=$3', [guildId, channelId, id])).rows[0];
+    const row = (await this.pool.query("SELECT config,snapshot FROM v2_revisions WHERE guild_id=$1 AND channel_id IS NOT DISTINCT FROM $2 AND id=$3 AND created_at>now()-interval '60 days'", [guildId, channelId, id])).rows[0];
     if (!row) return null;
     return row.snapshot || channelId === null ? configSchema.parse(row.config) : resolveConfig((await this.settings(guildId,channelId,true)).base,overridesSchema.parse(row.config));
   }
@@ -517,6 +533,17 @@ export class Store {
     return (await this.pool.query(`SELECT message_id,max(reason) AS reason,max(evidence->>'content') AS content,count(*)::int AS count
       FROM v2_reports WHERE guild_id=$1 AND channel_id=$2 AND status='open' AND expires_at>now()
       GROUP BY message_id ORDER BY min(created_at) DESC LIMIT 20`, [guildId, channelId])).rows;
+  }
+  async *openReportNotices(guildId?:string,channelId?:string){
+    let cursor='0';
+    for(;;){
+      const rows=(await this.pool.query(`SELECT guild_id,channel_id,message_id,notification_id,min(id)::text AS cursor FROM v2_reports
+        WHERE status='open' AND expires_at>now() AND notification_id IS NOT NULL AND notification_id NOT LIKE 'pending:%'
+          AND ($2::text IS NULL OR guild_id=$2) AND ($3::text IS NULL OR channel_id=$3)
+        GROUP BY guild_id,channel_id,message_id,notification_id HAVING min(id)>$1 ORDER BY min(id) LIMIT 25`,[cursor,guildId??null,channelId??null])).rows;
+      for(const row of rows)yield row as {guild_id:string;channel_id:string;message_id:string;notification_id:string;cursor:string};
+      if(rows.length<25)return;cursor=rows.at(-1)!.cursor;
+    }
   }
   async cleanup(): Promise<void> {
     await this.transaction(async client => {
@@ -530,6 +557,7 @@ export class Store {
       await client.query('DELETE FROM v2_posts WHERE expires_at<=now()');
       await client.query("DELETE FROM v2_sessions WHERE last_post<now()-interval '1 day'");
       await client.query('DELETE FROM v2_restrictions WHERE expires_at<=now()');
+      await client.query("DELETE FROM v2_revisions WHERE created_at<=now()-interval '60 days'");
       await client.query("DELETE FROM v2_actions WHERE created_at<now()-interval '90 days'");
     });
   }

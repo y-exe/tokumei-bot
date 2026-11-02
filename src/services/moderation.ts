@@ -1,11 +1,10 @@
 import {PermissionFlagsBits,type Guild} from 'discord.js';
 import {UserError} from '../domain/errors.js';
-import {isRequestMode} from '../domain/config.js';
 import {isBotAdmin} from '../domain/permissions.js';
 import type {Store,ReportDetail} from '../infra/store.js';
 import type {Posting} from './posting.js';
-export type Punishment='ban'|'timeout'|'revoke'|'none';
-export const punishmentLabels={ban:'サーバーBAN',timeout:'1ヶ月TO（28日間）',revoke:'匿名要望の使用権剥奪',none:'処罰なし'};
+export type Punishment='ban'|'timeout'|'restrict'|'none';
+export const punishmentLabels={ban:'サーバーBAN',timeout:'1ヶ月TO（28日間）',restrict:'匿名投稿の利用停止',none:'処罰なし'};
 export class Moderation{
   constructor(readonly store:Store,readonly posting:Posting){}
   async execute(guild:Guild,channelId:string,messageId:string,actorId:string,action:Punishment,reason:string):Promise<{report:ReportDetail;warning:string}>{
@@ -14,7 +13,7 @@ export class Moderation{
     if(config.policy.retentionDays===0||config.policy.reportRetentionDays===0)throw new UserError('保存しない設定のチャンネルでは通報処罰を利用できません。');
     const actor=await guild.members.fetch(actorId);
     if(!isBotAdmin(actorId)&&!actor.permissions.has(PermissionFlagsBits.ManageGuild)&&!actor.roles.cache.some(role=>config.moderation.managerRoles.includes(role.id)))throw new UserError('通報対応の管理権限が必要です。');
-    if(action==='revoke'&&!isRequestMode(config))throw new UserError('使用権剥奪は匿名要望の通報だけに実行できます。');
+    if(action==='restrict'&&!config.moderation.allowChannelRestriction)throw new UserError('通報からの匿名投稿の利用停止は、このチャンネルの設定で無効です。');
     const report=await this.store.reportDetail(guild.id,channelId,messageId);
     if(!report)throw new UserError('この通報は対応済みか、処理中・保存期限切れです。');
     if(action!=='none'&&!report.userId)throw new UserError('投稿者対応が保存されていないため処罰できません。');
@@ -32,9 +31,9 @@ export class Moderation{
     try{
       if(action==='ban'){await target!.ban({reason:reason||undefined,deleteMessageSeconds:0});external=true;}
       if(action==='timeout'){await target!.timeout(28*86_400_000-60_000,reason||undefined);external=true;}
-      await this.store.finishReportAction(guild.id,messageId,token,actorId,action,reason,action==='revoke'?report.userId:undefined);
+      await this.store.finishReportAction(guild.id,messageId,token,actorId,action,reason,action==='restrict'?report.userId:undefined);
     }catch(error){
-      if(!external&&(action==='none'||action==='revoke'||(typeof error==='object'&&error&&'code' in error&&typeof error.code==='number')))await this.store.releaseReportAction(guild.id,messageId,token).catch(()=>undefined);
+      if(!external&&(action==='none'||action==='restrict'||(typeof error==='object'&&error&&'code' in error&&typeof error.code==='number')))await this.store.releaseReportAction(guild.id,messageId,token).catch(()=>undefined);
       throw new UserError(external?'処罰は実行されましたが履歴の更新に失敗しました。再実行せずBot管理者へ確認してください。':'処罰の結果を確認できませんでした。二重実行を避けるため、Bot管理者へ確認してください。');
     }
     if(action==='ban'||action==='timeout'){

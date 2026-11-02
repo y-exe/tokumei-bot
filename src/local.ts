@@ -24,7 +24,7 @@ export function localEnvironment(settings: Record<string, string>, ambient: Node
   const { token, applicationId } = localCredentials(settings);
   const system = new Set(['PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA']);
   const result = Object.fromEntries(Object.entries(ambient).filter(([name]) => system.has(name.toUpperCase())));
-  for (const name of ['PIXIV_PHPSESSID', 'FFMPEG_PATH', 'FFPROBE_PATH', 'GALLERY_DL_PYTHON']) if (settings[name]) result[name] = settings[name];
+  for (const name of ['PIXIV_PHPSESSID', 'FFMPEG_PATH', 'FFPROBE_PATH', 'GALLERY_DL_PYTHON', 'BOT_ADMIN_ID_URL']) if (settings[name]) result[name] = settings[name];
   return { ...result, DISCORD_BOT_TOKEN: token, DISCORD_APPLICATION_ID: applicationId, LOCAL_DEVELOPMENT: '1', NODE_ENV: 'development',
     ENCRYPTION_KEY: key, MEDIA_CONCURRENCY: settings.MEDIA_CONCURRENCY || '1', HEALTH_PORT: '0' };
 }
