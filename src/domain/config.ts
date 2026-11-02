@@ -37,6 +37,7 @@ export const policySchema = z.object({
   charsPerFiveMinutes: z.number().int().min(0).max(500000).default(9000),
   spamTimeoutMinutes: z.number().int().min(1).max(1440).default(10),
   duplicateSeconds: z.number().int().min(0).max(3600).default(300),
+  cleanUrls: z.boolean().optional(), linkReferences: z.boolean().optional(),
   blockedWords: z.array(z.string().min(1).max(100)).max(200),
   blockedDomains: z.array(z.string().regex(/^(?:[a-z0-9-]+\.)+[a-z]{2,}$/i)).max(200),
   allowedRoles: z.array(snowflake).max(20),
@@ -52,10 +53,8 @@ export const configSchema = z.object({
   panel: panelSchema, content: contentSchema, identity: identitySchema,
   policy: policySchema, moderation: moderationSchema,
 }).strict().superRefine((config, ctx) => {
-  if (!config.content.text && !config.content.images)
-    ctx.addIssue({ code: 'custom', path: ['content'], message: 'テキストか画像のどちらかを有効にしてください。' });
-  if (config.content.urls && !config.content.images)
-    ctx.addIssue({ code: 'custom', path: ['content', 'urls'], message: 'URL変換には画像投稿を有効にしてください。' });
+  if (!config.content.text && !config.content.images && !config.content.urls)
+    ctx.addIssue({ code: 'custom', path: ['content'], message: 'メッセージ・直接添付・URL取得のいずれかを有効にしてください。' });
 });
 export const overridesSchema = z.object({
   panel: panelSchema.partial().optional(), content: contentSchema.partial().optional(),
@@ -93,15 +92,28 @@ export function urlMethodLabel(config: Config): string {
 export const presetNames = { chat: '匿名チャット', image: '匿名画像', upload: '画像アップロード専用', request: '匿名要望' } as const;
 export type Preset = keyof typeof presetNames;
 
+export function defaultPanelDescription(content: Pick<Config['content'], 'text' | 'images' | 'urls'>): string {
+  const media = content.images || content.urls;
+  const subject = content.text ? media ? 'メッセージや画像' : 'メッセージ' : '画像';
+  return `名前を公開せず匿名で${subject}を送信できます。\nルールや詳しい使い方は「ヘルプ・詳細」から確認してください。`;
+}
+
+export function isDefaultPanelDescription(description: string): boolean {
+  return description === '名前を表示せずに投稿できます。' || [
+    { text: true, images: true, urls: true }, { text: true, images: false, urls: false }, { text: false, images: true, urls: true },
+  ].some(content => defaultPanelDescription(content) === description);
+}
+
 export const defaults: Config = {
-  panel: { title: '匿名チャット', description: '名前を表示せずに投稿できます。', color: 0x2ca6a4, style: 'v2', repost: true,
-    image: '', thumbnail: '', footer: '', textLabel: '投稿する', imageLabel: '画像を送る', urlLabel: 'URLから画像', helpLabel: 'ルール・使い方' },
+  panel: { title: '匿名チャット', description: defaultPanelDescription({ text: true, images: true, urls: true }), color: null, style: 'v2', repost: true,
+    image: '', thumbnail: '', footer: '', textLabel: '匿名メッセージ送信', imageLabel: '画像送信', urlLabel: 'URLから画像送信', helpLabel: 'ヘルプ・詳細',
+    textStyle: 'primary', imageStyle: 'success', urlStyle: 'danger', textEmoji: '✍️', imageEmoji: '🖼️', urlEmoji: '📎', urlAutoLabel: false },
   content: { text: true, images: true, urls: true, caption: true, animation: false, video: false,
     maxFiles: 10, maxFileMB: 10, providers: ['x', 'pixiv', 'direct', 'bluesky', 'mastodon', 'misskey', 'tiktok', 'instagram', 'threads'] },
   identity: { showId: true, minutes: 20, kind:'chat' },
-  policy: { rules: '個人への攻撃や個人情報の投稿は禁止です。サーバーのルールに従ってご利用ください。',
+  policy: { rules: 'サーバーのルールに従ってご利用ください。',
     rulesUrl: '', cooldown: 5, postsPerMinute: 5, charsPerMinute: 3000, charsPerFiveMinutes: 9000, spamTimeoutMinutes: 10, duplicateSeconds: 300,
-    blockedWords: [], blockedDomains: [], allowedRoles: [], retentionDays: null, reportRetentionDays: null },
+    cleanUrls: true, linkReferences: true, blockedWords: [], blockedDomains: [], allowedRoles: [], retentionDays: null, reportRetentionDays: null },
   moderation: { managerRoles: [], reportChannel: null, logChannel: null, reportThreshold: 3, allowDirectPosts: false },
 };
 
@@ -116,7 +128,7 @@ export function presetOverrides(preset: Preset): Overrides {
   if (preset === 'image' || preset === 'upload') content.text = false;
   if (preset === 'upload') { content.urls = false; content.caption = false; }
   if (preset === 'request') content.urls = false;
-  return { panel: { title: presetNames[preset] }, content, identity: { ...defaults.identity, showId: preset !== 'request',kind:preset==='request'?'request':'chat' }, moderation: { allowDirectPosts: preset === 'request' } };
+  return { panel: { ...defaults.panel, title: presetNames[preset], description: defaultPanelDescription(content) }, content, identity: { ...defaults.identity, showId: preset !== 'request',kind:preset==='request'?'request':'chat' }, moderation: { allowDirectPosts: preset === 'request' } };
 }
 
 export function importTemplate(input: unknown, base: Config): Overrides {

@@ -136,6 +136,11 @@ test('返信と手入力の番号は直近の同じチャンネルの投稿へ�
   await store.deletePost(guild,c,future.split('/').at(-1)!);await store.deletePost(guild,c,secondId);
   assert.equal(await posting.linkReferences('>>321',guild,c,new Date()),`[>>321](${first})`);
   assert.equal(await posting.linkReferences('>>321',guild,'different',new Date()),'>>321');
+  await store.saveSettings(await store.settings(guild,c,true),'channel',{policy:{cooldown:0,linkReferences:false}},user);
+  const unlinked=await posting.publish(input('reference-disabled','>>321'));
+  assert.equal((sent.at(-1) as {content:string}).content,'>>321');
+  await posting.edit(guild,c,unlinked.split('/').at(-1)!,user,'>>321 編集');
+  assert.equal((edited.at(-1) as {content:string}).content,'>>321 編集');
   await store.pool.query("UPDATE v2_posts SET expires_at=now()-interval '1 second' WHERE message_id=$1",[firstId]);
   assert.equal(await posting.linkReferences('>>321',guild,c,new Date()),'>>321');
 });
@@ -301,6 +306,30 @@ test('本文・出典のX共有パラメータは送信と保存の前に除去�
   await store.deletePost(guild, c, id);
 });
 
+test('URL除去の設定は本文・出典・編集・取得URLに適用し、オフなら共有情報を維持する',async()=>{
+  const c='url-cleanup-channel';
+  await store.saveSettings(await store.settings(guild,c),'channel',{policy:{cooldown:0,cleanUrls:false}},user);
+  await store.setPanel(guild,c,'url-cleanup-panel',(await store.settings(guild,channel)).webhook!);
+  const source='https://x.com/example/status/123?a=private&s=20';
+  const text='https://example.com/page?id=12&utm_source=share';
+  const result=await posting.publish({...post('url-cleanup-off'),channelId:c,text,source});
+  const id=result.split('/').at(-1)!;
+  assert.equal((await store.post(guild,c,id))?.content,text);assert.equal((await store.post(guild,c,id))?.source,source);
+  await posting.edit(guild,c,id,user,`${text}&gclid=value`);
+  assert.ok((edited.at(-1) as {content:string}).content.includes(`${text}&gclid=value`));
+  await store.saveSettings(await store.settings(guild,c,true),'channel',{policy:{cooldown:0,cleanUrls:true}},user);
+  await posting.edit(guild,c,id,user,`${text}&gclid=value`);
+  assert.equal((await store.post(guild,c,id))?.content,'https://example.com/page?id=12');
+  class XHttp extends SafeHttp { override async json<T>():Promise<T>{return {tweet:{media:{all:[{type:'photo',url:'https://pbs.twimg.com/media/example.jpg'}]}}} as T;} }
+  const media=new MediaService(new XHttp());
+  const off=structuredClone(defaults);off.policy.cleanUrls=false;
+  assert.equal((await media.resolve(source,off)).source,source);
+  assert.equal((await media.resolve(source,defaults)).source,'https://x.com/example/status/123');
+  const direct='https://example.com/image.jpg?format=jpg&utm_source=share';
+  assert.equal((await media.resolve(direct,off)).media[0]?.url,direct);
+  assert.equal((await media.resolve(direct,defaults)).media[0]?.url,'https://example.com/image.jpg?format=jpg');
+});
+
 test('X動画だけのURL投稿は画像必須でも送信・保存・説明文の空編集ができ、安全判定も設定に従う', async () => {
   const c = 'url-video-channel';
   await store.saveSettings(await store.settings(guild, c), 'channel', {
@@ -387,9 +416,10 @@ test('X以外の対応サイト・直接URL・動画添付も実MP4を分散検�
   assert.equal(downloads.length, 7);
   assert.ok(downloads.every(url => !url.includes('x-p.yexe.xyz')));
   broken = true;
-  const invalid = await service.fromUrl(urls[0]!, config);
+  await assert.rejects(service.fromUrl(urls[0]!, config), /ファイルを取得できません/);
+  const invalid = await service.attachments(['https://cdn.discordapp.com/attachments/1/2/clip.mp4'], config);
   const before = sent.length;
-  await assert.rejects(posting.publish({ ...post('other-video-broken'), channelId: c, text: '', media: invalid.files }), /安全判定/);
+  await assert.rejects(posting.publish({ ...post('other-video-broken'), channelId: c, text: '', media: invalid }), /安全判定/);
   assert.equal(sent.length, before);
 });
 

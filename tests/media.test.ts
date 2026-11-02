@@ -10,6 +10,133 @@ import { isPublicAddress, SafeHttp, WorkQueue, MAX_DOWNLOAD_BYTES } from '../src
 import { MediaService, videoSourceUrl } from '../src/media/service.js';
 import { UserError } from '../src/domain/errors.js';
 import { randomBytes } from 'node:crypto';
+import { isHtml, pageMedia, videoContentType } from '../src/media/page.js';
+
+test('画像処理で不要なSVG・PDF・TIFFをデコードせず、JPEG・PNG・WebP・GIF・AVIFは維持する',async()=>{
+  const svg=Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>');
+  await assert.rejects(sharp(svg).metadata(),/blocked|unsupported|not supported/i);
+  const source=sharp({create:{width:8,height:8,channels:3,background:'white'}});
+  const tiff=await source.clone().tiff().toBuffer();await assert.rejects(sharp(tiff).metadata(),/blocked|unsupported|not supported/i);
+  for(const format of ['jpeg','png','webp','gif','avif'] as const){const data=await source.clone().toFormat(format).toBuffer();assert.equal((await sharp(data).metadata()).width,8);}
+});
+
+test('汎用ページは本文の大きな画像を順番に選び、関連画像・広告・小さいアイコンを混ぜない', () => {
+  const html = Buffer.from(`<meta property="og:image" content="/cover-small.jpg">
+    <header><img src="/logo.jpg" width="800" height="800"></header>
+    <main><article><img src="/1.webp" width="720" height="1040">
+    <img src="/placeholder.gif" data-src="/2.webp?quality=90&amp;size=full" width="720" height="1040">
+    <picture><source srcset="/3-small.webp 300w, /3-full.webp 1200w"><img src="/fallback.jpg"></picture>
+    <img src="/avatar.jpg" width="64" height="64"><img src="/loading.gif" data-original="/4.webp" width="100%" height="auto">
+    <div class="related-posts"><img src="/related.jpg" width="720" height="1040"></div></article></main>
+    <aside><img src="/advert.jpg" width="900" height="900"></aside>`);
+  assert.deepEqual(pageMedia(html, 'https://example.com/chapter/'), [
+    { url: 'https://example.com/1.webp', kind: 'image' }, { url: 'https://example.com/2.webp?quality=90&size=full', kind: 'image' },
+    { url: 'https://example.com/3-full.webp', kind: 'image' }, { url: 'https://example.com/4.webp', kind: 'image' },
+  ]);
+  assert.deepEqual(pageMedia(Buffer.from('<div><img data-srcset="/small.jpg 1x, /full.jpg 2x" width="720" height="1040"></div>'), 'https://example.com/'), [{ url: 'https://example.com/full.jpg', kind: 'image' }]);
+});
+
+test('サイドバーありのレイアウト属性で本文全体を除外せず、遅延読み込みの連続画像を取得する', () => {
+  const html=Buffer.from(`<html><body class="single has-sidebar sidebar-right"><meta property="og:image" content="/cover.webp">
+    <div class="main-with-sidebar"><main><article class="post has-post-thumbnail"><div class="content">
+    <img src="/1.webp" width="1200" height="900"><img data-src="/2.webp" width="850" height="1200" class="lazyload">
+    <img data-src="/3.webp" width="850" height="1200" class="lazyload"></div></article></main></div>
+    <div class="post-related"><img src="/related.webp" width="850" height="1200"></div><aside><img src="/sidebar.webp" width="850" height="1200"></aside></body></html>`);
+  assert.deepEqual(pageMedia(html,'https://example.com/article/').map(item=>new URL(item.url).pathname),['/1.webp','/2.webp','/3.webp']);
+});
+
+test('汎用の連続画像は最大10枚を取得し、上限と出典を案内する', async () => {
+  const image = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#3366cc' } }).webp().toBuffer();
+  const calls: string[] = [];
+  class GalleryHttp extends SafeHttp {
+    override async get(url: string, _max?: number, headers?: Record<string, string>) {
+      if (url.includes('/chapter')) return { data: Buffer.from(`<main>${Array.from({length: 12}, (_, i) => `<img data-src="https://cdn.example/${i + 1}.webp" width="720" height="1040">`).join('')}</main>`), contentType: 'text/html', url };
+      calls.push(url); assert.equal(headers?.Referer, 'https://example.com/chapter');
+      return { data: image, contentType: 'image/webp', url };
+    }
+  }
+  const config = structuredClone(defaults); config.content.allowNsfw = true; config.content.allowNsfl = true;
+  const result = await new MediaService(new GalleryHttp()).fromUrl('https://example.com/chapter?private=value', config);
+  assert.equal(result.files.length, 10); assert.equal(calls.length, 10);
+  assert.ok(result.warnings.some(message => message.includes('先頭10件')));
+  assert.equal(calls[0], 'https://cdn.example/1.webp'); assert.equal(calls.at(-1), 'https://cdn.example/10.webp');
+});
+
+test('本文画像に内部URLを仕込まれても取得しない', async () => {
+  class InternalHttp extends SafeHttp {
+    override async get(url: string, max: number, headers?: Record<string, string>) {
+      if (url === 'https://example.com/page') return { data: Buffer.from('<main><img src="https://127.0.0.1/private.png" width="720" height="1040"></main>'), contentType: 'text/html', url };
+      return super.get(url, max, headers);
+    }
+  }
+  await assert.rejects(new MediaService(new InternalHttp()).fromUrl('https://example.com/page', defaults), /ファイルを取得できません/);
+});
+
+test('HTMLの公開メディア情報を読み、スクリプト・プレイヤー・認証付きURLは実行も取得もしない', () => {
+  const html = Buffer.from(`<html><head><script>const x='<meta property="og:image" content="https://evil.example/fake.png">';</script>
+    <meta content="/photo.jpg?format=jpg&amp;name=orig" property="og:image"><meta name="twitter:image" content="/photo.jpg?format=jpg&amp;name=orig">
+    <meta property="og:video:secure_url" content="//cdn.example/clip.mp4"><meta name="twitter:player" content="https://player.example/embed">
+    <meta property="og:image" content="file:///etc/passwd"><meta property="og:image" content="https://user:pass@example.com/photo"></head>
+    <video><source src="/second.webm"></video><source src="/outside.webm"><iframe src="https://player.example/other"></iframe></html>`);
+  assert.equal(isHtml(html, 'application/octet-stream'), true);
+  assert.deepEqual(pageMedia(html, 'https://example.com/post'), [
+    { url: 'https://cdn.example/clip.mp4', kind: 'video' }, { url: 'https://example.com/second.webm', kind: 'video' },
+    { url: 'https://example.com/photo.jpg?format=jpg&name=orig', kind: 'image' },
+  ]);
+  assert.equal(videoContentType(Buffer.from('0000ftypavif')), undefined);
+  assert.equal(videoContentType(Buffer.from('0000ftypisom')), 'video/mp4');
+});
+
+test('XでHTMLが返っても投稿番号のファイルを添付せず、公開画像を取得し直す', async () => {
+  const image = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#3366cc' } }).png().toBuffer();
+  const calls: string[] = [];
+  class PageHttp extends SafeHttp {
+    override async json<T>(): Promise<T> { return { tweet: { media: { all: [{ type: 'photo', url: 'https://fxtwitter.com/meganegumasanV/status/2117201019331617116' }] } } } as T; }
+    override async get(url: string) {
+      calls.push(url);
+      return url.includes('fxtwitter.com') ? { data: Buffer.from('<!DOCTYPE html><meta property="og:image" content="https://pbs.twimg.com/media/HWHPDweawAAyNC9.jpg?name=orig">'), contentType: 'image/jpeg', url } : { data: image, contentType: 'image/png', url };
+    }
+  }
+  const config = structuredClone(defaults); config.content.allowNsfw = true; config.content.allowNsfl = true;
+  const result = await new MediaService(new PageHttp()).fromUrl('https://x.com/meganegumasanV/status/2117201019331617116?a=private&s=20', config);
+  assert.equal(result.files.length, 1); assert.equal(result.files[0]!.kind, 'image'); assert.match(result.files[0]!.name, /^image_1\./);
+  assert.equal(calls[1], 'https://pbs.twimg.com/media/HWHPDweawAAyNC9.jpg?name=orig');
+  assert.equal(result.source, 'https://x.com/meganegumasanV/status/2117201019331617116');
+});
+
+test('未対応の公開ページから画像と動画を取得し、HTMLやJSONだけのページをファイルにしない', async () => {
+  const image = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#3366cc' } }).avif().toBuffer();
+  const calls: string[] = [];
+  class PageHttp extends SafeHttp {
+    override async get(url: string) {
+      calls.push(url);
+      if (url.endsWith('/json')) return { data: Buffer.from('{"message":"not an image"}'), contentType: 'application/json', url };
+      if (url.endsWith('/empty')) return { data: Buffer.from('<html>ログインしてください</html>'), contentType: 'text/html', url };
+      if (url.endsWith('/image')) return { data: image, contentType: 'application/octet-stream', url };
+      if (url.endsWith('/video')) return { data: Buffer.from('0000ftypisom'), contentType: 'application/octet-stream', url };
+      return { data: Buffer.from('<html><meta property="og:image" content="/image"><video src="/video"></video></html>'), contentType: 'text/html', url };
+    }
+  }
+  const config = structuredClone(defaults); config.content.allowNsfw = true; config.content.allowNsfl = true;
+  const service = new MediaService(new PageHttp());
+  const result = await service.fromUrl('https://example.com/post', config);
+  assert.deepEqual(result.files.map(file => file.kind), ['video', 'image']); assert.equal(result.files[0]!.name, 'video.mp4');
+  for (const path of ['empty', 'json']) await assert.rejects(service.fromUrl(`https://example.com/${path}`, config), /ファイルを取得できません/);
+  const disabled = structuredClone(config); disabled.content.providers = ['x']; const count = calls.length;
+  await assert.rejects(service.fromUrl('https://example.com/post', disabled), /無効/); assert.equal(calls.length, count);
+});
+
+test('公開ページの取得は一段だけで、抽出先の禁止ドメインも拒否する', async () => {
+  const calls: string[] = [];
+  class RecursiveHttp extends SafeHttp {
+    override async get(url: string) { calls.push(url); return { data: Buffer.from('<html><meta property="og:image" content="https://blocked.example/next"></html>'), contentType: 'text/html', url }; }
+  }
+  const service = new MediaService(new RecursiveHttp());
+  await assert.rejects(service.fromUrl('https://example.com/post', defaults), /ファイルを取得できません/);
+  assert.equal(calls.length, 2);
+  const config = structuredClone(defaults); config.policy.blockedDomains = ['blocked.example'];
+  await assert.rejects(service.fromUrl('https://example.com/post', config), /禁止/); assert.equal(calls.length, 3);
+});
 
 test('X動画の安全判定はHTMLプレイヤーではなく元のMP4を取得する', () => {
   assert.equal(videoSourceUrl('https://x-p.yexe.xyz/amplify_video/123/vid/clip.mp4?tag=12'), 'https://video.twimg.com/amplify_video/123/vid/clip.mp4?tag=12');
@@ -18,7 +145,7 @@ test('X動画の安全判定はHTMLプレイヤーではなく元のMP4を取得
 });
 
 test('添付とURLのファイル合計容量を制限し、容量超過は途中成功扱いにしない', async () => {
-  const data = Buffer.alloc(17 * 1024 * 1024);
+  const data = Buffer.alloc(17 * 1024 * 1024); data.write('ftypisom', 4);
   class CapacityHttp extends SafeHttp {
     override async get(url: string) { return { data, contentType: 'application/octet-stream', url }; }
   }
@@ -203,7 +330,7 @@ test('Pixiv・Bluesky・Mastodonの公開画像をそれぞれの応答から抽
       if(url.includes('getPosts')){const images={images:[{fullsize:'https://cdn.bsky.app/image.png'}]};return {posts:[{embed:this.nested?{media:images}:images}]} as T;}
       return {visibility:'public',media_attachments:[{type:'image',url:null,remote_url:'https://cdn.example.com/photo.png'},{type:'video',url:'https://cdn.example.com/video.mp4'}]} as T;
     }
-    override async get(url:string){return url.endsWith('.mp4') ? {data:Buffer.from('fakevideo'),contentType:'video/mp4',url} : {data:image,contentType:'image/png',url};}
+    override async get(url:string){return url.endsWith('.mp4') ? {data:Buffer.from('0000ftypisom'),contentType:'video/mp4',url} : {data:image,contentType:'image/png',url};}
   }
   const http=new ProviderHttp();const service=new MediaService(http);
   const pixiv=await service.resolve('https://www.pixiv.net/en/artworks/123',defaults);
@@ -251,7 +378,7 @@ test('TikTok・Instagram・Threadsの公開投稿から画像と動画を取得�
         {type:'video',url:'https://api.atmosphere.tools/proxy?url=https%3A%2F%2Fv16.tiktok.com%2Fa.mp4'}]}}} as T;
       return {code:200,status:{url:'https://www.instagram.com/reel/abc/',media:{all:[{type:'image',url:'https://scontent.cdninstagram.com/a.jpg'}]}}} as T;
     }
-    override async get(url:string){return url.includes('/proxy') ? {data:Buffer.from('fakevideo'),contentType:'video/mp4',url} : {data:image,contentType:'image/jpeg',url};}
+    override async get(url:string){return url.includes('/proxy') ? {data:Buffer.from('0000ftypisom'),contentType:'video/mp4',url} : {data:image,contentType:'image/jpeg',url};}
   }
   const http=new AtmoHttp();const service=new MediaService(http);
   const tiktok=await service.resolve('https://www.tiktok.com/@user/video/123?is_from_webapp=1',defaults);
@@ -290,7 +417,7 @@ test('Misskeyの公開投稿の画像を取得し、非公開は拒否する',as
   assert.equal(result.provider,'misskey');assert.equal(result.source,'https://misskey.io/notes/note123');
   assert.equal(result.media.length,2);assert.equal(result.warnings.length,0);
   const image=await sharp({create:{width:8,height:8,channels:3,background:'#2266cc'}}).png().toBuffer();
-  class DownloadHttp extends MisskeyHttp { override async get(url:string){return url.endsWith('.webm') ? {data:Buffer.from('fakewebm'),contentType:'video/webm',url} : {data:image,contentType:'image/png',url};} }
+  class DownloadHttp extends MisskeyHttp { override async get(url:string){return url.endsWith('.webm') ? {data:Buffer.from([0x1a,0x45,0xdf,0xa3,0,0,0,0,0,0,0,0]),contentType:'video/webm',url} : {data:image,contentType:'image/png',url};} }
   const posted=await new MediaService(new DownloadHttp()).fromUrl('https://misskey.io/notes/note123',defaults);
   assert.equal(posted.files.length,2);assert.equal(posted.files[1]!.kind,'video');assert.equal(posted.files[1]!.name,'b.webm');
   await assert.rejects(new MediaService(new MisskeyHttp('followers')).resolve('https://misskey.io/notes/note123',defaults),/公開された投稿/);

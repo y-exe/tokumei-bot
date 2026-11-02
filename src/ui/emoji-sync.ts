@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import sharp from 'sharp';
+import sharp from '../media/sharp.js';
 import { emojiDefinitions, fallbackEmoji, type EmojiKey } from './emojis.js';
 
 export interface ApplicationEmoji { id: string; name: string; animated?: boolean; }

@@ -13,7 +13,7 @@ import type { Client, RepliableInteraction, ButtonInteraction, ModalSubmitIntera
 
 const snapshot = { guildId: 'g', channelId: 'c', base: structuredClone(defaults), config: structuredClone(defaults), overrides: {}, guildVersion: 0, channelVersion: 0, enabled: true, panelId: null, webhook: null };
 function app() {
-  return new App({} as Client, { settings: async () => structuredClone(snapshot), reportDetail: async () => null, checkFlood: async () => {} } as unknown as Store,
+  return new App({} as Client, { settings: async () => structuredClone(snapshot), reportDetail: async () => null, checkFlood: async () => {}, savedSetups: async () => [] } as unknown as Store,
     new SecretBox(randomBytes(32).toString('base64')), new MediaService());
 }
 function interaction(overrides: Record<string, unknown> = {}) {
@@ -40,6 +40,186 @@ test('/setupと案内の埋め込み編集は選択数上限が選択肢数以�
     Object.values(item).forEach(inspect);
   };
   assert.equal(views.length, 2); views.forEach(inspect);
+});
+
+test('/setupはモード引数なしで機能・ルール・確認を進め、設置までは公開しない', async () => {
+  const bot = app(); let shown = ''; let saved = 0;
+  bot.respond = async (_interaction, components) => { shown = JSON.stringify(components.map(component => component.toJSON())); };
+  bot.store.saveSettings = async () => { throw new Error('確認前に保存してはいけない'); };
+  const manager = { memberPermissions: new PermissionsBitField(PermissionFlagsBits.ManageGuild) };
+  await bot.command(interaction({ ...manager, commandName: 'setup', options: { getString: () => { throw new Error('引数は不要'); } } }) as never);
+  const id = shown.match(/cfg:([a-f0-9]+):features/)![1]!;
+  const session = bot.editors.get(id, 'alice', 'g');
+  const choose = async (action: string, values: string[] = []) => {
+    await bot.configure(interaction({ ...manager, values, isStringSelectMenu: () => true, update: async (value: unknown) => { shown = JSON.stringify(value); } }) as never, id, action);
+  };
+  assert.ok(shown.includes('1/3')); assert.equal(session.setupPage, 0);
+  assert.equal(session.value.content?.urls, false); assert.ok(!shown.includes(`cfg:${id}:providers`));
+  await choose('features', ['urls']);
+  assert.equal((session.value.content as { text: boolean }).text, false);
+  assert.equal(session.value.content?.images, false); assert.equal(session.value.content?.urls, true);
+  await assert.rejects(choose('save'), /確認ページ/);
+  await choose('setupnext'); assert.ok(shown.includes('2/3'));
+  await choose('directposts'); assert.equal(session.value.moderation?.allowDirectPosts, true);
+  await choose('safety', ['nsfw']); assert.equal(session.value.content?.allowNsfw, true); assert.equal(session.value.content?.allowNsfl, false);
+  await choose('setupprev'); assert.equal(session.setupPage, 0); assert.equal(session.value.content?.allowNsfw, true);
+  assert.ok(shown.includes('送信できるSNSを設定'));
+  await choose('providers', ['x']); assert.deepEqual(session.value.content?.providers, ['x']);
+  await choose('back'); assert.ok(shown.includes('1/3'));
+  await choose('setupnext'); await choose('setupnext'); assert.ok(shown.includes('3/3')); assert.ok(shown.includes('この内容で設置'));
+  bot.saveEditor = async () => { saved++; };
+  await bot.configure(interaction({ ...manager, deferUpdate: async () => {} }) as never, id, 'save'); assert.equal(saved, 1);
+});
+
+test('/setupで保存済み設定を確認して再設置し、新しく設定することも選べる', async () => {
+  const bot=app();let shown='';let applied=0;
+  const config=structuredClone(defaults);config.panel.title='停止前の案内';config.content.allowNsfw=true;
+  bot.store.settings=async()=>({...structuredClone(snapshot),config});
+  bot.store.savedSetups=async()=>[{channelId:'c',name:'前のチャンネル',title:config.panel.title,enabled:false,savedAt:null}];
+  bot.respond=async(_i,components)=>{shown=JSON.stringify(components.map(component=>component.toJSON()));};
+  const manager={memberPermissions:new PermissionsBitField(PermissionFlagsBits.ManageGuild)};
+  const open=async()=>{await bot.command(interaction({...manager,commandName:'setup',options:{getString:()=>null}}) as never);return shown.match(/cfg:([a-f0-9]+):reusesource/)![1]!;};
+  bot.saveEditor=async(_i,_id,session)=>{applied++;assert.equal(session.channelId,'c');assert.equal(session.value.panel?.title,'停止前の案内');assert.equal(session.value.content?.allowNsfw,true);};
+  const id=await open();assert.ok(shown.includes('停止前の案内'));assert.equal(applied,0);
+  await bot.configure(interaction({...manager,deferUpdate:async()=>{}}) as never,id,'reuseapply');assert.equal(applied,1);
+  const fresh=await open();
+  await bot.configure(interaction({...manager,update:async(value:unknown)=>{shown=JSON.stringify(value);}}) as never,fresh,'newsetup');
+  assert.ok(shown.includes('1/3'));assert.equal(bot.editors.get(fresh,'alice','g').value.content?.allowNsfw,false);
+});
+
+test('別・削除済みチャンネルの設定はプレビューしてから今のチャンネルへコピーし、候補外は拒否する', async () => {
+  const bot=app();let shown='';let applied=0;
+  bot.store.savedSetups=async()=>[{channelId:'deleted',name:'削除したチャンネル',title:'元の案内',enabled:true,savedAt:null}];
+  bot.store.savedSetup=async(g,c)=>{assert.equal(g,'g');assert.equal(c,'deleted');return {...structuredClone(defaults),panel:{...defaults.panel,title:'元の案内'}};};
+  bot.respond=async(_i,components)=>{shown=JSON.stringify(components.map(component=>component.toJSON()));};
+  const manager={memberPermissions:new PermissionsBitField(PermissionFlagsBits.ManageGuild)};
+  await bot.command(interaction({...manager,commandName:'setup'}) as never);
+  const id=shown.match(/cfg:([a-f0-9]+):reusesource/)![1]!;
+  const request=(source:string)=>interaction({...manager,values:[source],isStringSelectMenu:()=>true,update:async(value:unknown)=>{shown=JSON.stringify(value);}});
+  await assert.rejects(bot.configure(request('outside') as never,id,'reusesource'),/候補/);
+  await bot.configure(request('deleted') as never,id,'reusesource');assert.ok(shown.includes('元の案内'));
+  bot.saveEditor=async(_i,_id,session)=>{applied++;assert.equal(session.original.channelId,'c');assert.equal(session.value.panel?.title,'元の案内');};
+  assert.equal(applied,0);await bot.configure(interaction({...manager,deferUpdate:async()=>{}}) as never,id,'reuseapply');assert.equal(applied,1);
+});
+
+test('バックアップは選択とプレビューまで下書きを変えず、削除には確認が必要', async () => {
+  const bot=app();let shown='';
+  const id=bot.editors.create({owner:'alice',guildId:'g',channelId:'c',scope:'channel',original:snapshot,value:{panel:{title:'編集中'}},installing:false});
+  let deleted=false;
+  bot.store.settingsBackups=async()=>deleted?[]:[{id:'1',createdAt:new Date(),channelId:'c',channelName:'保存元'}];
+  bot.store.settingsBackup=async()=>deleted?null:{panel:{title:'変更前'}};
+  bot.store.deleteSettingsBackup=async()=>{deleted=true;return true;};
+  const request=(selected='1')=>interaction({values:[selected],isStringSelectMenu:()=>true,memberPermissions:new PermissionsBitField(PermissionFlagsBits.ManageGuild),update:async(value:unknown)=>{shown=JSON.stringify(value);}});
+  await bot.configure(request() as never,id,'restore');assert.ok(shown.includes('設定バックアップ'));assert.equal(bot.editors.get(id,'alice','g').value.panel?.title,'編集中');
+  await assert.rejects(bot.configure(request('2') as never,id,'restoreselect'),/一覧/);
+  await bot.configure(request() as never,id,'restoreselect');assert.ok(shown.includes('変更前'));
+  await bot.configure(request() as never,id,'restorecancel');assert.equal(bot.editors.get(id,'alice','g').value.panel?.title,'編集中');
+  await assert.rejects(bot.configure(request() as never,id,'restoreapply'),/確認画面/);
+  await bot.configure(request() as never,id,'restore');await bot.configure(request() as never,id,'restoreselect');await bot.configure(request() as never,id,'restoreapply');assert.equal(bot.editors.get(id,'alice','g').value.panel?.title,'変更前');
+  await bot.configure(request() as never,id,'restore');await bot.configure(request() as never,id,'restoreselect');
+  await assert.rejects(bot.configure(request() as never,id,'restoredeleteconfirm'),/削除確認/);
+  await bot.configure(request() as never,id,'restoredelete');assert.ok(shown.includes('削除しますか'));assert.equal(deleted,false);
+  await bot.configure(request() as never,id,'restoredeletecancel');assert.equal(deleted,false);
+  await bot.configure(request() as never,id,'restoredelete');await bot.configure(request() as never,id,'restoredeleteconfirm');assert.equal(deleted,true);
+  assert.ok(shown.includes('バックアップはありません'));assert.equal(bot.editors.get(id,'alice','g').value.panel?.title,'変更前');
+});
+
+test('停止中の案内は再開確認後に編集し、保存するまでは受付を再開しない',async()=>{
+  const bot=app();let shown='',saved=0;
+  const stopped={...structuredClone(snapshot),enabled:false,panelId:'stopped-panel'};
+  bot.store.settings=async()=>stopped;
+  bot.respond=async(_interaction,components)=>{shown=JSON.stringify(components.map(component=>component.toJSON()));};
+  const manager={memberPermissions:new PermissionsBitField(PermissionFlagsBits.ManageGuild)};
+  const open=async()=>{
+    await bot.context(interaction({...manager,commandName:'埋め込みを編集（Admin）',targetId:'stopped-panel'}) as never);
+    assert.ok(shown.includes('匿名投稿の受付を再開しますか'));
+    return shown.match(/cfg:([a-f0-9]+):resumeconfirm/)![1]!;
+  };
+  const request=()=>interaction({...manager,update:async(value:unknown)=>{shown=JSON.stringify(value);},deferUpdate:async()=>{}});
+  const cancelled=await open();await bot.configure(request() as never,cancelled,'cancel');assert.equal(stopped.enabled,false);
+  const id=await open();
+  await assert.rejects(bot.configure(request() as never,id,'save'),/再開を確認/);
+  await bot.configure(request() as never,id,'resumeconfirm');assert.ok(shown.includes('保存して再開'));assert.equal(stopped.enabled,false);
+  bot.saveEditor=async(_interaction,_id,session)=>{assert.equal(session.installing,true);assert.equal(session.resuming,true);saved++;};
+  await bot.configure(request() as never,id,'save');assert.equal(saved,1);
+});
+
+test('他チャンネルのバックアップは適用直前にも保存元の管理権限を確認する',async()=>{
+  const bot=app();const role='400000000000000088';let revoked=false;
+  bot.store.settings=async(_g,c)=>({...structuredClone(snapshot),config:{...structuredClone(defaults),moderation:{...defaults.moderation,managerRoles:c==='source'&&revoked?[]:[role]}}});
+  bot.store.settingsBackups=async(_g,roles)=>{assert.deepEqual(roles,[role]);return [{id:'1',createdAt:new Date(),channelId:'source',channelName:'保存元'}];};
+  bot.store.settingsBackup=async()=>({...structuredClone(defaults),panel:{...defaults.panel,title:'保存元の内容'}});
+  const id=bot.editors.create({owner:'alice',guildId:'g',channelId:'c',scope:'channel',original:snapshot,value:{},installing:false});
+  const request=()=>interaction({member:{roles:[role]},values:['1'],isStringSelectMenu:()=>true,update:async()=>{}});
+  await bot.configure(request() as never,id,'restore');await bot.configure(request() as never,id,'restoreselect');
+  revoked=true;
+  await assert.rejects(bot.configure(request() as never,id,'restoreapply'),/管理権限/);
+  assert.deepEqual(bot.editors.get(id,'alice','g').value,{});
+});
+
+test('別チャンネルの設定選択時も管理権限を再確認する',async()=>{
+  const bot=app();let shown='';const role='400000000000000091';
+  bot.store.settings=async(_g,c)=>({...structuredClone(snapshot),config:{...structuredClone(defaults),moderation:{...defaults.moderation,managerRoles:c==='c'?[role]:[]}}});
+  bot.store.savedSetups=async(_g,_c,_offset,roles)=>{assert.deepEqual(roles,[role]);return [{channelId:'restricted',name:null,title:'非公開',enabled:false,savedAt:null}];};
+  bot.store.savedSetup=async()=>{throw new Error('権限なしでは読み取らない');};
+  bot.respond=async(_i,components)=>{shown=JSON.stringify(components.map(component=>component.toJSON()));};
+  const request={member:{roles:[role]},memberPermissions:new PermissionsBitField(0n)};
+  await bot.command(interaction({...request,commandName:'setup'}) as never);const id=shown.match(/cfg:([a-f0-9]+):reusesource/)![1]!;
+  await assert.rejects(bot.configure(interaction({...request,values:['restricted'],isStringSelectMenu:()=>true}) as never,id,'reusesource'),/管理ロール/);
+});
+
+test('埋め込み編集のSNS一覧はURL取得を選んだ先に表示する', async () => {
+  const bot = app(); let shown = '';
+  const id = bot.editors.create({ owner: 'alice', guildId: 'g', channelId: 'c', scope: 'channel', original: snapshot, value: {}, installing: false });
+  const request = { memberPermissions: new PermissionsBitField(PermissionFlagsBits.ManageGuild), values: ['text', 'images', 'urls', 'caption'], isStringSelectMenu: () => true, update: async (value: unknown) => { shown = JSON.stringify(value); } };
+  await bot.configure(interaction(request) as never, id, 'back'); assert.ok(shown.includes(`cfg:${id}:providers`)); assert.ok(shown.includes(`cfg:${id}:appearance`));
+  await bot.configure(interaction(request) as never, id, 'content'); assert.ok(shown.includes('送信できるSNSを設定')); assert.ok(shown.includes(`cfg:${id}:providers`));
+  assert.ok(shown.includes(`cfg:${id}:content`)); assert.ok(!shown.includes(`cfg:${id}:providersview`));
+  assert.ok(shown.includes(`cfg:${id}:appearance`));
+  await bot.configure(interaction({ ...request, values: ['text', 'images'] }) as never, id, 'content'); assert.ok(!shown.includes(`cfg:${id}:providers`));
+  for (const action of ['management','filter','other','export','import']) assert.ok(shown.includes(`cfg:${id}:${action}`));
+  await bot.configure(interaction(request) as never,id,'other');assert.ok(shown.includes('その他の設定'));
+  let modal='';
+  for(const action of ['limitsbasic','spam']) {
+    await bot.configure(interaction({...request,showModal:async(value:unknown)=>{modal=JSON.stringify(value);}}) as never,id,action);
+    assert.ok(modal.includes(`edit:${id}:${action}`));
+  }
+  for (const action of ['identity','urlcleanup','references'])assert.ok(shown.includes(`cfg:${id}:${action}`));
+  await bot.configure(interaction(request) as never, id, 'back'); assert.ok(shown.includes('追加したい機能'));
+});
+
+test('標準・初期値へのリセットは確認必須で、キャンセル時は下書きを保持する', async () => {
+  for (const scope of ['channel', 'guild'] as const) {
+    const bot = app(); let shown = '';
+    const original = { ...structuredClone(defaults), panel: { ...defaults.panel, title: '編集中の設定' } };
+    const id = bot.editors.create({ owner: 'alice', guildId: 'g', channelId: 'c', scope, original: snapshot, value: original, installing: true });
+    const session = bot.editors.get(id, 'alice', 'g');
+    const request = () => interaction({ memberPermissions: new PermissionsBitField(PermissionFlagsBits.ManageGuild), update: async (value: unknown) => { shown = JSON.stringify(value); } });
+    await assert.rejects(bot.configure(request() as never, id, 'resetconfirm'), /確認画面/);
+    await bot.configure(request() as never, id, 'reset'); assert.ok(shown.includes('resetconfirm')); assert.deepEqual(session.value, original);
+    await bot.configure(request() as never, id, 'resetcancel'); assert.deepEqual(session.value, original);
+    await assert.rejects(bot.configure(request() as never, id, 'resetconfirm'), /確認画面/);
+    await bot.configure(request() as never, id, 'reset');
+    await assert.rejects(bot.configure(interaction({ ...request(), user: { id: 'bob' } }) as never, id, 'resetconfirm'), /本人/);
+    assert.deepEqual(session.value, original);
+    await bot.configure(request() as never, id, 'resetconfirm'); assert.deepEqual(session.value, scope === 'guild' ? defaults : {});
+  }
+});
+
+test('機能変更で説明文を切り替え、手動で書いた説明文は維持する', async () => {
+  const bot = app();
+  const id = bot.editors.create({ owner: 'alice', guildId: 'g', channelId: 'c', scope: 'channel', original: snapshot, value: {}, installing: true, setupPage: 0 });
+  const session = bot.editors.get(id, 'alice', 'g');
+  const request = (values: string[]) => interaction({ values, memberPermissions: new PermissionsBitField(PermissionFlagsBits.ManageGuild), isStringSelectMenu: () => true, update: async () => {} });
+  for (const [values, phrase] of [[['text'], 'メッセージを送信'], [['images'], '画像を送信'], [['text', 'images'], 'メッセージや画像を送信'], [['urls'],'画像を送信']] as const) {
+    await bot.configure(request([...values]) as never, id, 'features'); assert.ok(session.value.panel?.description?.includes(phrase));
+    assert.equal(session.value.content?.images,values.some(value=>value==='images'));
+    assert.equal(session.value.content?.urls,values.some(value=>value==='urls'));
+  }
+  session.setupPage = undefined;
+  await bot.configure(request(['urls']) as never,id,'content');assert.equal(session.value.content?.images,false);assert.equal(session.value.content?.urls,true);
+  session.setupPage = undefined; session.value.panel = { ...session.value.panel, description: '手動の説明文' };
+  await bot.configure(request(['text']) as never, id, 'content'); assert.equal(session.value.panel.description, '手動の説明文');
 });
 
 test('処理失敗時は画面と保存詳細に同じエラーコードを付ける', async () => {
@@ -211,6 +391,12 @@ test('Bot管理者はDiscord管理権限なしでサーバー標準の編集と�
   await assert.rejects(bot.command(interaction({user:owner,commandName:'error',deferReply:async()=>{},options:{getString:()=> '1234abcd'}}) as never),/見つかりません/);
   assert.equal(checked,true);
 });
+
+test('管理ロールだけではサーバー標準の編集画面を開けない',async()=>{
+  const bot=app();const role='400000000000000090';
+  bot.store.settings=async()=>({...structuredClone(snapshot),config:{...structuredClone(defaults),moderation:{...defaults.moderation,managerRoles:[role]}}});
+  await assert.rejects(bot.command(interaction({commandName:'settings',member:{roles:[role]},options:{getString:()=> 'guild'}}) as never),/サーバー標準の変更/);
+});
 test('他人の下書き・別サーバーの下書きを操作できず、管理権限が失われた操作も拒否する', async () => {
   const bot = app();
   const id = bot.editors.create({ owner: 'alice', guildId: 'g', channelId: 'c', scope: 'channel', original: snapshot, value: {}, installing: false });
@@ -360,9 +546,24 @@ test('ボタン色のモーダル選択は下書きだけを更新し、不正�
     isFromMessage:()=>true,update:async()=>{updates++;}}) as ModalSubmitInteraction;
   await bot.modal(submit());const session=bot.editors.get(id,'alice','g');
   assert.equal(session.value.panel?.imageStyle,'success');assert.equal(updates,1);
-  assert.equal((await bot.store.settings('g','c')).config.panel.imageStyle,undefined);
+  assert.equal((await bot.store.settings('g','c')).config.panel.imageStyle,defaults.panel.imageStyle);
   const before=structuredClone(session.value);values.helpStyle='pink';
   await assert.rejects(bot.modal(submit()));assert.deepEqual(session.value,before);assert.equal(updates,1);
+});
+
+test('その他の自動処理設定は下書きに保存し、変更後も説明付きの一覧に戻る',async()=>{
+  const bot=app();const id=bot.editors.create({owner:'alice',guildId:'g',channelId:'c',scope:'channel',original:snapshot,value:{},installing:false,returnToOther:true});
+  let shown='';let value='off';
+  for(const [action,name] of [['urlcleanup','cleanUrls'],['references','linkReferences']] as const) {
+    const submit=()=>interaction({customId:`edit:${id}:${action}`,memberPermissions:new PermissionsBitField(PermissionFlagsBits.ManageGuild),
+      fields:{fields:new Map([[name,{type:ComponentType.StringSelect}]]),getStringSelectValues:()=>[value]},isFromMessage:()=>true,update:async(body:unknown)=>{shown=JSON.stringify(body);}}) as ModalSubmitInteraction;
+    await bot.modal(submit());assert.equal(bot.editors.get(id,'alice','g').value.policy?.[name],false);
+    assert.ok(shown.includes('その他の設定'));assert.ok(shown.includes('無効'));
+    assert.equal((await bot.store.settings('g','c')).config.policy[name],true);
+    const before=structuredClone(bot.editors.get(id,'alice','g').value);value='invalid';
+    await assert.rejects(bot.modal(submit()),/有効・無効/);assert.deepEqual(bot.editors.get(id,'alice','g').value,before);
+    value='off';
+  }
 });
 
 test('案内の色は空欄と「なし」で解除でき、不正入力では下書きを変更しない', async () => {

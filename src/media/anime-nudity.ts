@@ -1,4 +1,4 @@
-import sharp from 'sharp';
+import sharp from './sharp.js';
 import * as ort from 'onnxruntime-node';
 import { createHash, randomUUID } from 'node:crypto';
 import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';

@@ -35,6 +35,7 @@ test('全体への登録成功後に各サーバーの重複だけを削除し�
 });
 
 test('Discord側のID・順序・既定値の補完を定義の変更と扱わない',()=>{
+  assert.ok(commands.every(command => JSON.stringify(command.integration_types) === '[0]'));
   const current=commands.map((command,index)=>({
     ...command,id:String(index),application_id:'app',version:'version',description:'description' in command?command.description:'',
     default_member_permissions:null,nsfw:false,integration_types:[0],contexts:null,
@@ -47,7 +48,7 @@ test('説明・引数・選択肢・既定権限の変更と、コマンドの�
   const changed=()=>structuredClone(commands) as unknown as Record<string,any>[];
   const description=changed();description.find(command=>command.name==='setup')!.description='変更した説明';
   assert.equal(commandDefinitionsEqual(description as RegisteredCommand[]),false);
-  const choice=changed();choice.find(command=>command.name==='setup')!.options[0].choices[0].value='different';
+  const choice=changed();choice.find(command=>command.name==='settings')!.options[0].choices[0].value='different';
   assert.equal(commandDefinitionsEqual(choice as RegisteredCommand[]),false);
   const option=changed();option.find(command=>command.name==='post')!.options[0].max_length=100;
   assert.equal(commandDefinitionsEqual(option as RegisteredCommand[]),false);

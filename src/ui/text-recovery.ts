@@ -6,7 +6,7 @@ import { button, card, colors, row } from './components.js';
 
 export type TextAction =
   | { kind: 'post'; media: PostInput['media']; source?: string; replyTo?: string; videoLinks?: string[] }
-  | { kind: 'url'; url: string }
+  | { kind: 'url'; url: string; replyTo?: string }
   | { kind: 'edit'; messageId: string }
   | { kind: 'caption'; previewId: string };
 export interface TextRecoverySession extends OwnedSession {

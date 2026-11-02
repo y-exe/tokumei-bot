@@ -16,6 +16,100 @@ before(async () => {
 });
 after(async () => { if (store) await store.close(); if (server) await server.stop(); if (db) await db.close(); });
 
+test('設定バックアップは保存後の全設定を保持し、サーバー全体8件で古い順に削除する', async () => {
+  const g='100000000000000081', c='200000000000000081';
+  await store.saveSettings(await store.settings(g,c),'channel',{panel:{title:'最初の保存'}},actor,'保存先');
+  const first=(await store.settingsBackups(g))[0]!;
+  assert.equal(first.channelName,'保存先');assert.equal(first.channelId,c);
+  assert.equal((await store.settingsBackup(g,c,first.id))?.panel?.title,'最初の保存');
+  const base=await store.settings(g,c,true);
+  const changed=structuredClone(base.base);changed.panel.description='標準を変更';
+  await store.saveSettings(base,'guild',changed,actor);
+  assert.notEqual((await store.settingsBackup(g,c,first.id))?.panel?.description,'標準を変更');
+  const standard=(await store.settingsBackups(g))[0]!;
+  assert.equal((await store.settingsBackup(g,null,standard.id))?.panel?.description,'標準を変更');
+  assert.equal(await store.settingsBackup('other',c,first.id),null);
+  assert.equal(await store.settingsBackup(g,null,first.id),null);
+  assert.equal(await store.settingsBackup(g,'other',first.id),null);
+  assert.equal(await store.deleteSettingsBackup('other',c,first.id),false);
+  assert.equal(await store.deleteSettingsBackup(g,null,first.id),false);
+  await store.pool.query("UPDATE v2_revisions SET created_at=now()-interval '200 days' WHERE id=$1",[first.id]);
+  await store.cleanup();assert.ok(await store.settingsBackup(g,c,first.id));
+  await store.pool.query('INSERT INTO v2_revisions(guild_id,channel_id,config,actor_id) VALUES($1,$2,$3,$4)',[g,c,{panel:{title:'移行前の履歴'}},actor]);
+  const legacy=(await store.settingsBackups(g))[0]!;
+  assert.equal((await store.settingsBackup(g,c,legacy.id))?.panel?.title,'移行前の履歴');
+  for(let n=0;n<25;n++)await store.saveSettings(await store.settings(g,c,true),'channel',{panel:{title:`保存${n}`}},actor,'保存先');
+  assert.equal((await store.settingsBackups(g)).length,8);
+  assert.equal(await store.settingsBackup(g,c,first.id),null);
+  const latest=(await store.settingsBackups(g))[0]!;
+  await store.disable(g,c);assert.ok(await store.settingsBackup(g,c,latest.id));
+  assert.equal(await store.deleteSettingsBackup(g,c,latest.id),true);
+  assert.equal(await store.settingsBackup(g,c,latest.id),null);
+  assert.equal((await store.settings(g,c,true)).config.panel.title,'保存24');
+});
+
+test('停止しても最新設定と名前を保持し、同じサーバーの権限がある候補だけを再利用できる', async () => {
+  const g='100000000000000071', c='200000000000000071', role='400000000000000071';
+  await store.saveSettings(await store.settings(g,c),'channel',{panel:{title:'再利用する設定'},content:{allowNsfw:true},moderation:{managerRoles:[role]}},actor,'元のチャンネル');
+  await store.setPanel(g,c,'old-panel','private-webhook'); await store.disable(g,c);
+  const saved=(await store.savedSetups(g,c))[0]!;
+  assert.equal(saved.name,'元のチャンネル');assert.equal(saved.enabled,false);assert.equal(saved.title,'再利用する設定');
+  assert.ok(!JSON.stringify(saved).includes('private-webhook'));
+  const config=await store.savedSetup(g,c);assert.equal(config?.content.allowNsfw,true);
+  assert.ok(!JSON.stringify(config).includes('private-webhook'));
+  assert.deepEqual(await store.savedSetups(g,c,0,[]),[]);
+  assert.equal((await store.savedSetups(g,c,0,[role])).length,1);
+  assert.equal(await store.savedSetup('other-guild',c),null);
+  await store.cleanup();assert.ok(await store.savedSetup(g,c));
+  await store.pool.query('INSERT INTO v2_channels(guild_id,channel_id) VALUES($1,$2)',[g,'200000000000000072']);
+  assert.equal((await store.savedSetups(g,c)).length,1);
+  const target='200000000000000074';
+  await store.saveSettings(await store.settings(g,target),'channel',config!,actor,'新しいチャンネル');
+  const copied=await store.settings(g,target,true);
+  assert.equal(copied.config.panel.title,'再利用する設定');assert.equal(copied.config.content.allowNsfw,true);assert.equal(copied.webhook,null);
+  assert.equal((await store.settings(g,c,true)).enabled,false);
+});
+
+test('バックアップ8枠はサーバーごとに共有し、並行保存や権限による絞り込みでも混ざらない',async()=>{
+  const g='backup-pool',role='400000000000000081';
+  await store.settings(g,'init');
+  await Promise.all(Array.from({length:12},async(_,index)=>{
+    const channel=`backup-channel-${index}`;
+    await store.saveSettings(await store.settings(g,channel,true),'channel',{moderation:{managerRoles:[role]}},actor,`保存先${index}`);
+  }));
+  const backups=await store.settingsBackups(g);
+  assert.equal(backups.length,8);assert.equal(new Set(backups.map(item=>item.id)).size,8);
+  assert.ok(backups.every(item=>item.channelName.startsWith('保存先')));
+  assert.equal((await store.settingsBackups(g,[role])).length,8);
+  assert.equal((await store.settingsBackups(g,[])).length,0);
+  await store.saveSettings(await store.settings('other-backup-pool','c'),'channel',{},actor,'別サーバー');
+  assert.equal((await store.settingsBackups('other-backup-pool')).length,1);
+  const latest=backups[0]!;
+  assert.equal(await store.settingsBackup('other-backup-pool',latest.channelId,latest.id),null);
+  assert.equal(await store.deleteSettingsBackup('other-backup-pool',latest.channelId,latest.id),false);
+  const settings=await store.settings(g,latest.channelId!,true);
+  await store.setPanel(g,settings.channelId,'old-panel','webhook');
+  const beforeStop=await store.settings(g,settings.channelId,true);
+  await store.disable(g,settings.channelId);
+  assert.equal(await store.setPanel(g,settings.channelId,'stale-panel','webhook',beforeStop),false);
+  assert.equal((await store.settings(g,settings.channelId,true)).enabled,false);
+  await assert.rejects(store.saveSettings(beforeStop,'channel',{},actor),/更新されました/);
+  assert.equal((await store.settingsBackups(g)).length,8);
+  for(let index=0;index<10;index++)await store.pool.query('INSERT INTO v2_revisions(guild_id,config,actor_id) VALUES($1,$2,$3)',['old-backup-pool',defaults,actor]);
+  await store.initialize();
+  assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM v2_revisions WHERE guild_id=$1',['old-backup-pool'])).rows[0].n,8);
+  assert.equal((await store.settingsBackups('other-backup-pool')).length,1);
+});
+
+test('再利用候補はこのチャンネルを先頭にし、25件を超える設定もページで取得できる', async () => {
+  const g='100000000000000073', c='200000000000000073';
+  await store.saveSettings(await store.settings(g,c),'channel',{},actor);
+  for(let index=0;index<27;index++)await store.pool.query('INSERT INTO v2_channels(guild_id,channel_id,version) VALUES($1,$2,1)',[g,`2000000000000001${String(index).padStart(2,'0')}`]);
+  const first=await store.savedSetups(g,c), second=await store.savedSetups(g,c,25);
+  assert.equal(first.length,26);assert.equal(first[0]!.channelId,c);assert.equal(second.length,3);
+  assert.equal(new Set([...first.slice(0,25),...second].map(item=>item.channelId)).size,28);
+});
+
 test('エラー詳細は再読み込みでき別サーバーには開示せず30日で削除する', async () => {
   await store.saveDiagnostic('ERR-0123456789ABCDEF', guild, channel, 'interaction', 'setup', '原因の詳細');
   assert.equal((await store.diagnostic('ERR-0123456789ABCDEF', guild))?.details, '原因の詳細');

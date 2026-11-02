@@ -24,7 +24,7 @@
 
 | ページ | 内容 |
 | --- | --- |
-| [開発・テスト](development/testing.md) | コード配置、テスト、実画像の検証、CI |
+| [開発・テスト](development/testing.md) | PGliteでローカル起動、テスト、実画像の検証、CI |
 | [モデル仕様](development/models.md) | ONNXの入出力、前処理、手動配置 |
 | [旧Botからの移行](development/migration.md) | JSON・旧DBの読み込み、確認実行、移行先指定 |
 

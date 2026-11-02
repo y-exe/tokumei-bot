@@ -12,6 +12,8 @@ export interface ChannelSettings {
   guildVersion: number; channelVersion: number; enabled: boolean;
   panelId: string | null; webhook: string | null;
 }
+export interface SavedSetup { channelId: string; name: string | null; title: string; enabled: boolean; savedAt: Date | null; }
+export interface SettingsBackup { id: string; createdAt: Date; channelId: string | null; channelName: string; }
 export interface StoredPost {
   operation_id: string; guild_id: string; channel_id: string; message_id: string | null;
   user_id?: string; content: string; source: string | null; reply_to: string | null;
@@ -44,10 +46,17 @@ CREATE TABLE IF NOT EXISTS v2_channels (
   overrides jsonb NOT NULL DEFAULT '{}', version integer NOT NULL DEFAULT 0,
   enabled boolean NOT NULL DEFAULT false, panel_id text, webhook text
 );
+ALTER TABLE v2_channels ADD COLUMN IF NOT EXISTS channel_name text;
+ALTER TABLE v2_channels ADD COLUMN IF NOT EXISTS settings_saved_at timestamptz;
 CREATE TABLE IF NOT EXISTS v2_revisions (
   id bigserial PRIMARY KEY, guild_id text NOT NULL, channel_id text, config jsonb NOT NULL,
   actor_id text NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE v2_revisions ADD COLUMN IF NOT EXISTS snapshot boolean NOT NULL DEFAULT false;
+ALTER TABLE v2_revisions ADD COLUMN IF NOT EXISTS channel_name text;
+CREATE INDEX IF NOT EXISTS v2_revisions_scope ON v2_revisions(guild_id,channel_id,id DESC);
+CREATE INDEX IF NOT EXISTS v2_revisions_guild ON v2_revisions(guild_id,id DESC);
+DELETE FROM v2_revisions WHERE id IN (SELECT id FROM (SELECT id,row_number() OVER(PARTITION BY guild_id ORDER BY id DESC) AS position FROM v2_revisions) ranked WHERE position>8);
 CREATE TABLE IF NOT EXISTS v2_counters (
   channel_id text PRIMARY KEY, counter integer NOT NULL DEFAULT 0, last_user text
 );
@@ -191,7 +200,7 @@ export class Store {
   invalidate(guildId: string): void {
     for (const key of this.cache.keys()) if (key.startsWith(`${guildId}:`)) this.cache.delete(key);
   }
-  async saveSettings(previous: ChannelSettings, scope: 'guild' | 'channel', value: Config | Overrides, actor: string): Promise<void> {
+  async saveSettings(previous: ChannelSettings, scope: 'guild' | 'channel', value: Config | Overrides, actor: string, channelName?: string): Promise<void> {
     actor = this.identityKey(previous.guildId, actor);
     const parsed = scope === 'guild' ? configSchema.parse(value) : overridesSchema.parse(value);
     await this.transaction(async client => {
@@ -201,16 +210,17 @@ export class Store {
       if (scope === 'guild') {
         const channels = await client.query('SELECT overrides FROM v2_channels WHERE guild_id=$1', [previous.guildId]);
         for (const channel of channels.rows) resolveConfig(parsed as Config, channel.overrides);
-        await client.query('INSERT INTO v2_revisions(guild_id,config,actor_id) SELECT guild_id,config,$2 FROM v2_guilds WHERE guild_id=$1', [previous.guildId, actor]);
+        await client.query("INSERT INTO v2_revisions(guild_id,config,actor_id,snapshot,channel_name) VALUES($1,$2,$3,true,'サーバー標準')", [previous.guildId, parsed, actor]);
         await client.query('UPDATE v2_guilds SET config=$2,version=version+1 WHERE guild_id=$1', [previous.guildId, parsed]);
       } else {
         await client.query('INSERT INTO v2_channels(guild_id,channel_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [previous.guildId, previous.channelId]);
         const channel = (await client.query('SELECT * FROM v2_channels WHERE guild_id=$1 AND channel_id=$2 FOR UPDATE', [previous.guildId, previous.channelId])).rows[0];
         if (!channel || channel.version !== previous.channelVersion) throw new UserError('このチャンネルの設定が更新されました。/settings から開き直してください。');
         resolveConfig(previous.base, parsed as Overrides);
-        await client.query('INSERT INTO v2_revisions(guild_id,channel_id,config,actor_id) VALUES($1,$2,$3,$4)', [previous.guildId, previous.channelId, channel.overrides, actor]);
-        await client.query('UPDATE v2_channels SET overrides=$3,version=version+1 WHERE guild_id=$1 AND channel_id=$2', [previous.guildId, previous.channelId, parsed]);
+        await client.query('INSERT INTO v2_revisions(guild_id,channel_id,config,actor_id,snapshot,channel_name) VALUES($1,$2,$3,$4,true,$5)', [previous.guildId, previous.channelId, resolveConfig(previous.base, parsed as Overrides), actor, channelName?.slice(0,100) ?? channel.channel_name]);
+        await client.query('UPDATE v2_channels SET overrides=$3,version=version+1,channel_name=COALESCE($4,channel_name),settings_saved_at=now() WHERE guild_id=$1 AND channel_id=$2', [previous.guildId, previous.channelId, parsed, channelName?.slice(0,100) ?? null]);
       }
+      await client.query('DELETE FROM v2_revisions WHERE guild_id=$1 AND id NOT IN (SELECT id FROM v2_revisions WHERE guild_id=$1 ORDER BY id DESC LIMIT 8)',[previous.guildId]);
       const base=(await client.query('SELECT config FROM v2_guilds WHERE guild_id=$1',[previous.guildId])).rows[0].config;
       const channels=(await client.query('SELECT channel_id,overrides FROM v2_channels WHERE guild_id=$1',[previous.guildId])).rows;
       for(const channel of channels){
@@ -232,12 +242,13 @@ export class Store {
     });
     this.invalidate(previous.guildId);
   }
-  async setPanel(guildId: string, channelId: string, panelId: string, webhook: string): Promise<void> {
-    await this.pool.query('UPDATE v2_channels SET panel_id=$3,webhook=$4,enabled=true WHERE guild_id=$1 AND channel_id=$2', [guildId, channelId, panelId, webhook]);
+  async setPanel(guildId: string, channelId: string, panelId: string, webhook: string, previous?: ChannelSettings): Promise<boolean> {
+    const result = await this.pool.query('UPDATE v2_channels SET panel_id=$3,webhook=$4,enabled=true WHERE guild_id=$1 AND channel_id=$2 AND ($5::int IS NULL OR version=$5) AND ($6::int IS NULL OR (SELECT version FROM v2_guilds WHERE guild_id=$1)=$6)', [guildId, channelId, panelId, webhook, previous?.channelVersion ?? null, previous?.guildVersion ?? null]);
     this.invalidate(guildId);
+    return !!result.rowCount;
   }
   async disable(guildId: string, channelId: string): Promise<void> {
-    await this.pool.query('UPDATE v2_channels SET enabled=false WHERE guild_id=$1 AND channel_id=$2', [guildId, channelId]); this.invalidate(guildId);
+    await this.pool.query('UPDATE v2_channels SET enabled=false,version=version+1 WHERE guild_id=$1 AND channel_id=$2', [guildId, channelId]); this.invalidate(guildId);
   }
   async replacePanel(previous: ChannelSettings, panelId: string): Promise<boolean> {
     const result = await this.pool.query(`UPDATE v2_channels SET panel_id=$3
@@ -249,6 +260,21 @@ export class Store {
   }
   async configuredChannels(guildId: string): Promise<string[]> {
     return (await this.pool.query('SELECT channel_id FROM v2_channels WHERE guild_id=$1 AND enabled=true', [guildId])).rows.map(row => row.channel_id);
+  }
+  async savedSetups(guildId: string, currentChannelId: string, offset = 0, roles?: string[]): Promise<SavedSetup[]> {
+    const result = await this.pool.query(`SELECT c.channel_id,c.channel_name,c.enabled,c.settings_saved_at,
+      COALESCE(c.overrides->'panel'->>'title',g.config->'panel'->>'title','匿名投稿') AS title
+      FROM v2_channels c JOIN v2_guilds g ON g.guild_id=c.guild_id
+      WHERE c.guild_id=$1 AND (c.version>0 OR c.panel_id IS NOT NULL OR c.webhook IS NOT NULL OR c.overrides<>'{}'::jsonb)
+      AND ($4::text[] IS NULL OR EXISTS(SELECT 1 FROM jsonb_array_elements_text(
+        COALESCE(c.overrides->'moderation'->'managerRoles',g.config->'moderation'->'managerRoles','[]'::jsonb)) AS r(role) WHERE r.role=ANY($4)))
+      ORDER BY (c.channel_id=$2) DESC,c.settings_saved_at DESC NULLS LAST,c.channel_id LIMIT 26 OFFSET $3`, [guildId,currentChannelId,Math.max(0,offset),roles ?? null]);
+    return result.rows.map(row=>({channelId:row.channel_id,name:row.channel_name,title:row.title,enabled:row.enabled,savedAt:row.settings_saved_at}));
+  }
+  async savedSetup(guildId: string, channelId: string): Promise<Config | null> {
+    const row = (await this.pool.query(`SELECT c.overrides,g.config FROM v2_channels c JOIN v2_guilds g ON g.guild_id=c.guild_id
+      WHERE c.guild_id=$1 AND c.channel_id=$2 AND (c.version>0 OR c.panel_id IS NOT NULL OR c.webhook IS NOT NULL OR c.overrides<>'{}'::jsonb)`, [guildId,channelId])).rows[0];
+    return row ? resolveConfig(configSchema.parse(row.config),overridesSchema.parse(row.overrides)) : null;
   }
   async configuredPanels(): Promise<{ guildId: string; channelId: string; panelId: string }[]> {
     return (await this.pool.query('SELECT guild_id, channel_id, panel_id FROM v2_channels WHERE enabled=true AND panel_id IS NOT NULL'))
@@ -467,9 +493,25 @@ export class Store {
     await this.pool.query("UPDATE v2_reports SET status='resolved' WHERE guild_id=$1 AND message_id=$2", [guildId, messageId]);
     await this.pool.query("INSERT INTO v2_actions(guild_id,actor_id,action,message_id) VALUES($1,$2,'resolve',$3)", [guildId, this.identityKey(guildId,actor), messageId]);
   }
-  async previousSettings(guildId: string, channelId: string | null): Promise<Config | Overrides | null> {
-    const row = (await this.pool.query('SELECT config FROM v2_revisions WHERE guild_id=$1 AND channel_id IS NOT DISTINCT FROM $2 ORDER BY id DESC LIMIT 1', [guildId, channelId])).rows[0];
-    return row ? channelId ? overridesSchema.parse(row.config) : configSchema.parse(row.config) : null;
+  async settingsBackups(guildId: string, roles?: string[]): Promise<SettingsBackup[]> {
+    const result = await this.pool.query(`SELECT r.id::text,r.created_at,r.channel_id,
+      CASE WHEN r.channel_id IS NULL THEN 'サーバー標準' ELSE COALESCE(r.channel_name,c.channel_name,'保存元のチャンネル') END AS channel_name
+      FROM v2_revisions r JOIN v2_guilds g ON g.guild_id=r.guild_id
+      LEFT JOIN v2_channels c ON c.guild_id=r.guild_id AND c.channel_id=r.channel_id
+      WHERE r.guild_id=$1 AND ($2::text[] IS NULL OR (r.channel_id IS NOT NULL AND EXISTS(
+        SELECT 1 FROM jsonb_array_elements_text(COALESCE(c.overrides->'moderation'->'managerRoles',g.config->'moderation'->'managerRoles','[]'::jsonb)) AS role(value) WHERE role.value=ANY($2))))
+      ORDER BY r.id DESC LIMIT 8`, [guildId, roles ?? null]);
+    return result.rows.map(row => ({ id: row.id, createdAt: row.created_at, channelId: row.channel_id, channelName: row.channel_name }));
+  }
+  async settingsBackup(guildId: string, channelId: string | null, id: string): Promise<Config | Overrides | null> {
+    if (!/^[1-9]\d{0,18}$/.test(id)) return null;
+    const row = (await this.pool.query('SELECT config,snapshot FROM v2_revisions WHERE guild_id=$1 AND channel_id IS NOT DISTINCT FROM $2 AND id=$3', [guildId, channelId, id])).rows[0];
+    if (!row) return null;
+    return row.snapshot || channelId === null ? configSchema.parse(row.config) : resolveConfig((await this.settings(guildId,channelId,true)).base,overridesSchema.parse(row.config));
+  }
+  async deleteSettingsBackup(guildId: string, channelId: string | null, id: string): Promise<boolean> {
+    if (!/^[1-9]\d{0,18}$/.test(id)) return false;
+    return !!(await this.pool.query('DELETE FROM v2_revisions WHERE guild_id=$1 AND channel_id IS NOT DISTINCT FROM $2 AND id=$3', [guildId, channelId, id])).rowCount;
   }
   async openReports(guildId: string, channelId: string): Promise<{ message_id: string; reason: string; content: string; count: number }[]> {
     return (await this.pool.query(`SELECT message_id,max(reason) AS reason,max(evidence->>'content') AS content,count(*)::int AS count
@@ -488,7 +530,6 @@ export class Store {
       await client.query('DELETE FROM v2_posts WHERE expires_at<=now()');
       await client.query("DELETE FROM v2_sessions WHERE last_post<now()-interval '1 day'");
       await client.query('DELETE FROM v2_restrictions WHERE expires_at<=now()');
-      await client.query("DELETE FROM v2_revisions WHERE created_at<now()-interval '90 days'");
       await client.query("DELETE FROM v2_actions WHERE created_at<now()-interval '90 days'");
     });
   }

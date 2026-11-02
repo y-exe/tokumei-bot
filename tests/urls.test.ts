@@ -1,20 +1,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { stripXSharingParameters } from '../src/domain/urls.js';
+import { cleanSharedUrls } from '../src/domain/urls.js';
 
 test('Xの共有URLは本文・Markdown・複数リンクでもクエリを除去する', () => {
   const base = 'https://x.com/dixy_720/status/2115713637780508732';
-  assert.equal(stripXSharingParameters(`${base}?a=private&s=20`), base);
-  assert.equal(stripXSharingParameters(`画像 [リンク](${base}?a=private&s=20) と <${base}?s=20&a=private>`), `画像 [リンク](${base}) と <${base}>`);
-  assert.equal(stripXSharingParameters(`こちら${base}?a=private。続き`), `こちら${base}。続き`);
-  assert.equal(stripXSharingParameters(`${base}?a=one&a=two&s=20&utm_source=share#detail`), `${base}#detail`);
+  assert.equal(cleanSharedUrls(`${base}?a=private&s=20`), base);
+  assert.equal(cleanSharedUrls(`画像 [リンク](${base}?a=private&s=20) と <${base}?s=20&a=private>`), `画像 [リンク](${base}) と <${base}>`);
+  assert.equal(cleanSharedUrls(`こちら${base}?a=private。続き`), `こちら${base}。続き`);
+  assert.equal(cleanSharedUrls(`${base}?a=one&a=two&s=20&utm_source=share#detail`), `${base}#detail`);
 });
 
 test('旧Twitter・モバイル・投稿者省略・画像や動画の個別URLでも除去する', () => {
   for (const host of ['x.com', 'www.x.com', 'mobile.x.com', 'twitter.com', 'www.twitter.com', 'mobile.twitter.com']) {
     for (const path of ['/example/status/123', '/i/status/123', '/i/web/status/123', '/example/status/123/photo/1', '/example/status/123/video/1']) {
       const base = `https://${host}${path}`;
-      assert.equal(stripXSharingParameters(`${base}?a=private&s=20&t=tracking`), base);
+      assert.equal(cleanSharedUrls(`${base}?a=private&s=20&t=tracking`), base);
     }
   }
 });
@@ -28,5 +28,19 @@ test('画像配信URL・他サイト・検索やプロフィールの機能用�
     'https://x.com/search?q=example&s=20',
     'https://x.com/example?a=value',
     'https://x.com/example/status/123',
-  ]) assert.equal(stripXSharingParameters(value), value);
+  ]) assert.equal(cleanSharedUrls(value), value);
+});
+
+test('全サイトの既知の計測情報だけ除去し、無効時・署名・機能用パラメーターは維持する', () => {
+  const value='https://example.com/page?id=12&utm_source=share&format=jpg&gclid=tracking&q=a%20b#part';
+  assert.equal(cleanSharedUrls(value),'https://example.com/page?id=12&format=jpg&q=a%20b#part');
+  assert.equal(cleanSharedUrls(value,false),value);
+  assert.equal(cleanSharedUrls('https://x.com/a/status/123?a=private&s=20',false),'https://x.com/a/status/123?a=private&s=20');
+  assert.equal(cleanSharedUrls('https://example.com/?utm_source=one&utm_source=two&fbclid=x'),'https://example.com/');
+  assert.equal(cleanSharedUrls('https://example.com/?a=one&s=search&format=png&name=large'),'https://example.com/?a=one&s=search&format=png&name=large');
+  for(const key of ['sig','token','X-Amz-Signature','X-Goog-Credential','expires','Policy','hmac']) {
+    const signed=`https://example.com/image?${key}=signed&utm_source=value&format=jpg`;
+    assert.equal(cleanSharedUrls(signed),signed);
+  }
+  const malformed='https://example.com/?%ZZ=value&utm_source=share';assert.equal(cleanSharedUrls(malformed),malformed);
 });

@@ -10,6 +10,7 @@
 | Node.js 22.16以上 | テスト用の`tsx` |
 | PostgreSQL | 設定・投稿者対応・通報の保存 |
 | FFmpeg・ffprobe | 動画のフレーム抽出。Dockerには同梱 |
+| Python・gallery-dl 1.32.19 | 対応サイトの画像URL抽出。Dockerには同梱。手動導入は[ローカル環境](../development/testing.md)を参照 |
 
 ## Discordの準備
 

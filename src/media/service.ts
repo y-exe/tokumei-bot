@@ -1,14 +1,17 @@
-import sharp from 'sharp';
+import sharp from './sharp.js';
+import { cleanSharedUrls } from '../domain/urls.js';
 import { z } from 'zod';
 import type { Config, Provider } from '../domain/config.js';
 import { providerNames } from '../domain/config.js';
 import { UserError, MediaSafetyError } from '../domain/errors.js';
 import { analyzeImageSafety, certifyImage, enforceImageSafety } from './safety-policy.js';
-import { mediaBytes, type MediaFile } from '../domain/validation.js';
+import { mediaBytes, validateText, type MediaFile } from '../domain/validation.js';
 import { SafeHttp, WorkQueue, MAX_DOWNLOAD_BYTES } from './http.js';
+import { isHtml, pageMedia, videoContentType } from './page.js';
+import { GalleryDl } from './gallery.js';
 
 export interface MediaSource { url: string; kind: 'image' | 'animation' | 'video'; headers?: Record<string, string>; }
-export interface ResolvedMedia { provider: Provider; source: string; media: MediaSource[]; warnings: string[]; }
+export interface ResolvedMedia { provider: Provider; source: string; media: MediaSource[]; warnings: string[]; galleryChecked?: boolean; }
 export const DISCORD_FILE_LIMIT = 25 * 1024 * 1024;
 class MediaCapacityError extends UserError {
   constructor() { super('添付ファイルの合計容量が32MiBを超えています。ファイル数やサイズを減らしてください。'); }
@@ -17,7 +20,7 @@ const appendMedia = (files: MediaFile[], file: MediaFile): void => {
   if (files.reduce((bytes, item) => bytes + mediaBytes(item), mediaBytes(file)) > MAX_DOWNLOAD_BYTES) throw new MediaCapacityError();
   files.push(file);
 };
-const videoExtension: Record<string, string> = { 'video/mp4': '.mp4', 'video/webm': '.webm', 'video/quicktime': '.mov', 'audio/mpeg': '.mp3', 'application/pdf': '.pdf', 'text/plain': '.txt' };
+const videoExtension: Record<string, string> = { 'video/mp4': '.mp4', 'video/webm': '.webm', 'video/quicktime': '.mov', 'video/x-msvideo': '.avi', 'video/x-flv': '.flv', 'video/ogg': '.ogv', 'audio/mpeg': '.mp3', 'application/pdf': '.pdf', 'text/plain': '.txt' };
 const safeFileName = (name: string | undefined, contentType: string | undefined, index: number): string => {
   const cleaned = (name ?? '').replace(/[^\w.\- ]/g, '_').replace(/ {2,}/g, ' ').trim().slice(-100) || `file_${index + 1}`;
   return /\.[a-z0-9]{1,8}$/i.test(cleaned) ? cleaned : `${cleaned}${videoExtension[contentType ?? ''] ?? ''}`;
@@ -60,15 +63,16 @@ const mediaKind = (url: string, type?: string): MediaSource['kind'] => {
 };
 
 export class MediaService {
-  constructor(readonly http = new SafeHttp(), readonly queue = new WorkQueue()) {}
+  constructor(readonly http = new SafeHttp(), readonly queue = new WorkQueue(), readonly gallery = new GalleryDl()) {}
   async optimize(data: Buffer, config: Config, index = 0, fallbackName?: string, contentType?: string): Promise<MediaFile> {
     const passthrough = (): MediaFile => ({ data, name: safeFileName(fallbackName, contentType, index), kind: contentType?.startsWith('video/') ? 'video' : 'file' });
     try {
       const image = sharp(data, { animated: true, limitInputPixels: 40_000_000 });
       const metadata = await image.metadata();
-      if (!['jpeg', 'png', 'webp', 'gif', 'avif'].includes(metadata.format ?? '')) return passthrough();
+      const format = metadata.format === 'heif' && metadata.compression === 'av1' ? 'avif' : metadata.format;
+      if (!['jpeg', 'png', 'webp', 'gif', 'avif'].includes(format ?? '')) return passthrough();
       const animated = (metadata.pages ?? 1) > 1;
-      if (animated) return { data, name: `image_${index + 1}.${metadata.format}`, kind: 'animation' };
+      if (animated) return { data, name: `image_${index + 1}.${format}`, kind: 'animation' };
       if ((metadata.width ?? 0) * (metadata.height ?? 0) > 40_000_000) return passthrough();
       const safety = await analyzeImageSafety(data, config);
       enforceImageSafety(safety, config);
@@ -109,10 +113,10 @@ export class MediaService {
   private async resolveSource(value:string,config:Config):Promise<ResolvedMedia> {
     if (!config.content.urls) throw new UserError('このチャンネルではURL変換を利用できません。');
     let url: URL;
-    try { url = new URL(value.trim()); } catch { throw new UserError('URLを1件入力してください。'); }
+    try { url = new URL(cleanSharedUrls(value.trim(), config.policy.cleanUrls !== false)); } catch { throw new UserError('URLを1件入力してください。'); }
     if (url.protocol !== 'https:' || url.username || url.password || url.port) throw new UserError('HTTPSの公開URLを入力してください。');
     const host = url.hostname.toLowerCase();
-    let provider: Provider; let source = url.href; let media: MediaSource[] = [];
+    let provider: Provider; let source = url.href; let media: MediaSource[] = []; let galleryChecked=false;
     const warnings: string[] = [];
     if (['x.com', 'www.x.com', 'mobile.x.com', 'twitter.com', 'www.twitter.com', 'mobile.twitter.com'].includes(host)) provider = 'x';
     else if (['pixiv.net', 'www.pixiv.net'].includes(host)) provider = 'pixiv';
@@ -185,10 +189,15 @@ export class MediaService {
       if (!post) throw new UserError(`${providerNames[provider]}の公開投稿を取得できませんでした。非公開か、URLを確認してください。`);
       source = post.url ?? canonical(url);
       media = (post.media?.all ?? []).map(item => ({ url: item.url, kind: mediaKind(item.url, item.type) }));
-    } else media = [{ url: source, kind: 'image' }];
+    } else {
+      if(!/\.(?:jpe?g|png|webp|gif|avif|mp4|webm|mov)(?:\/)?$/i.test(url.pathname)){galleryChecked=true;media=await this.gallery.resolve(source,config);}
+      if(!media.length)media = [{ url: source, kind: 'image' }];
+    }
+    if(!media.length){galleryChecked=true;media=await this.gallery.resolve(source,config);}
     if (!media.length) throw new UserError('画像を取得できませんでした。画像のある公開投稿か、画像ファイルのURLを指定してください。');
     if (media.length > 10) warnings.push('Discordの上限により、最初の10個のファイルを添付します。');
-    return { provider, source, media: media.slice(0, 10), warnings };
+    source = config.policy.cleanUrls === false ? value.trim() : cleanSharedUrls(source);
+    return { provider, source, media: media.slice(0, 10), warnings, galleryChecked };
   }
   async fromUrl(value: string, config: Config): Promise<{ files: MediaFile[]; source: string; warnings: string[]; videoLinks: string[] }> {
     return this.queue.run(async () => {
@@ -196,19 +205,46 @@ export class MediaService {
       const files: MediaFile[] = [];
       const videoLinks: string[] = [];
       const warnings = [...resolved.warnings];
-      for (const [sourceIndex,item] of resolved.media.entries()) {
+      const pending = resolved.media.map(item => ({ ...item, page: true }));
+      const visited = new Set<string>();
+      let sourceIndex = 0;
+      while (pending.length && files.length + videoLinks.length < 10 && visited.size < 20) {
+        const item = pending.shift()!;
+        if (visited.has(item.url)) continue;
+        visited.add(item.url); sourceIndex++;
+        validateText(item.url, config, 4000, 'source');
         if (resolved.provider === 'x' && isTwimgVideo(item.url)) { videoLinks.push(videoProxyUrl(item.url)); continue; }
         try {
           const response = await this.http.get(item.url, DISCORD_FILE_LIMIT, item.headers);
+          validateText(response.url, config, 4000, 'source');
+          if (isHtml(response.data, response.contentType)) {
+            if (!item.page || response.data.length > 2 * 1024 * 1024) throw new UserError('画像・動画の実ファイルを取得できませんでした。');
+            const galleryMedia=resolved.provider==='direct'&&!resolved.galleryChecked?await this.gallery.resolve(response.url,config):[];
+            resolved.galleryChecked=true;
+            const extracted = galleryMedia.length?galleryMedia:pageMedia(response.data, response.url);
+            if (!extracted.length) throw new UserError('公開ページに取得できる画像・動画情報がありません。');
+            if (extracted.length > 10) warnings.push('Discordの上限により、本文画像・動画の先頭10件だけを取得します。');
+            const referer = new URL(response.url); referer.search = ''; referer.hash = '';
+            pending.unshift(...extracted.slice(0, 10).map(media => ({ ...media, headers: { Referer: referer.href,...('headers' in media?media.headers:{}) }, page: false })));
+            continue;
+          }
           const original = fileNameFromUrl(item.url);
           const name = original && original !== 'proxy' ? original : undefined;
-          appendMedia(files, await this.optimize(response.data, config, files.length, name, response.contentType));
+          const videoType = videoContentType(response.data);
+          if (videoType) {
+            appendMedia(files, { data: response.data, name: safeFileName(name, videoType, files.length), kind: 'video' });
+          } else {
+            const file = await this.optimize(response.data, config, files.length, name, response.contentType);
+            if (file.kind !== 'image' && file.kind !== 'animation') throw new UserError('画像・動画として読み取れませんでした。');
+            appendMedia(files, file);
+          }
         } catch (error) {
           if (error instanceof MediaSafetyError || error instanceof MediaCapacityError) throw error;
-          if (error instanceof UserError && error.message.includes('大きすぎ')) warnings.push(`元のファイル${sourceIndex + 1}は大きすぎて添付できませんでした。`);
-          else warnings.push(`元のファイル${sourceIndex + 1}を取得できませんでした。取得できたファイルだけを表示しています。`);
+          if (error instanceof UserError && error.message.includes('大きすぎ')) warnings.push(`元のファイル${sourceIndex}は大きすぎて添付できませんでした。`);
+          else warnings.push(`元のファイル${sourceIndex}を取得できませんでした。取得できたファイルだけを表示しています。`);
         }
       }
+      if (pending.length) warnings.push('取得数の上限に達したため、取得できた画像・動画だけを表示しています。');
       if (!files.length && !videoLinks.length) throw new UserError('ファイルを取得できませんでした。直接添付してお試しください。');
       return { files, source: resolved.source, warnings, videoLinks };
     });

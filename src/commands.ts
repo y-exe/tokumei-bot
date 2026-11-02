@@ -4,9 +4,7 @@ const guildCommand = (name: string, description: string) => new SlashCommandBuil
 export const commands = [
   guildCommand('error', 'エラーIDから保存された詳細を確認する')
     .addStringOption(option => option.setName('code').setDescription('8桁のエラーID（以前のERR-形式も利用可能）').setRequired(true).setMaxLength(20)),
-  guildCommand('setup', 'このチャンネルに匿名投稿を設置する')
-    .addStringOption(option => option.setName('mode').setDescription('投稿モード').setRequired(true).addChoices(
-      { name: '匿名チャット', value: 'chat' }, { name: '匿名画像', value: 'image' }, { name: '画像アップロード専用', value: 'upload' }, { name: '匿名要望', value: 'request' })),
+  guildCommand('setup', '使いたい機能を選んで、このチャンネルに匿名投稿を設置する'),
   guildCommand('settings', '案内・ルール・投稿方法をプレビューしながら設定する')
     .addStringOption(option => option.setName('scope').setDescription('設定する範囲').addChoices({ name: 'このチャンネル', value: 'channel' }, { name: 'サーバー標準', value: 'guild' })),
   guildCommand('post', '匿名でメッセージを投稿する').addStringOption(option => option.setName('text').setDescription('本文').setRequired(true).setMaxLength(1800)),
@@ -20,4 +18,4 @@ export const commands = [
   guildCommand('stop', 'このチャンネルの匿名投稿受付を停止する'),
   guildCommand('panel', 'このチャンネルの案内を現在の設定でもう一度送る（誤って消したとき用）'),
   ...['メッセージに返信', 'メッセージを編集', 'メッセージを削除', '匿名つぶやき通報', '埋め込みを編集（Admin）'].map(name => new ContextMenuCommandBuilder().setName(name).setType(ApplicationCommandType.Message).setDMPermission(false)),
-].map(command => command.toJSON());
+].map(command => ({ ...command.toJSON(), integration_types: [0] }));

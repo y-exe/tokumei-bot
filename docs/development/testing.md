@@ -4,6 +4,40 @@
 
 ## コマンド
 
+### DiscordにつなぐローカルBot
+
+Node.js 22.16以上・Bun・FFmpegを用意し、次を実行します。PostgreSQLやDockerは不要です。
+
+```sh
+bun install --frozen-lockfile
+```
+
+gallery-dlも使う場合は、Python 3.10以上で専用環境を作ります。
+
+```sh
+python -m venv .local/gallery-dl
+```
+
+Windowsでは `.local\gallery-dl\Scripts\python.exe -m pip install --upgrade pip setuptools gallery-dl==1.32.19`、Linux/macOSでは `.local/gallery-dl/bin/python -m pip install --upgrade pip setuptools gallery-dl==1.32.19` を実行します。ローカル起動時に自動検出します。
+
+`.env.local.example` を `.env.local` にコピーし、**テスト専用Bot**の `DISCORD_BOT_TOKEN` と `DISCORD_APPLICATION_ID` を設定してください。Discord側ではMessage Content Intentを有効にし、テストサーバーへ招待します。
+
+```sh
+npm run local
+# 別のターミナルから停止する場合
+npm run local:stop
+```
+
+- PGliteのDBは `.local/dev/pglite/`、暗号鍵は `.local/dev/encryption.key` に保存し、再起動後も引き継ぎます。暗号鍵を失うと保存データを復号できません。
+- 本番の `.env` や親プロセスのDB・監視・lookup設定を引き継ぎません。本番BotのIDでは起動できず、トークンとテストBotのIDが一致することも確認します。
+- Discordへは実際に接続します。コマンド・絵文字の同期もテストBotに対して行います。ステータスには `[テスト]` が付きます。
+- 初回は安全判定モデルを取得します。以後は既存の `models/` を使います。動画テストにはFFmpeg・ffprobeが必要です。
+- gallery-dlは公開メディアのURL抽出にだけ使用します。Botのトークン・DB設定・Pixiv Cookieは子プロセスへ渡しません。
+- 二重起動は禁止です。強制終了後の古いロックは、記録されたプロセスが終了済みなら次回起動時に回収します。
+- `.env.local` と `.local/` はGit管理外です。PCごとにトークン・データを用意してください。
+
+### 自動テスト・本番と同じ起動
+
 ```sh
 bun install --frozen-lockfile
 bun run check
@@ -12,7 +46,7 @@ bun run dev
 ```
 
 `check`は型チェック、`test`はNode.jsのテストランナー、`dev`は変更監視付き起動です。
-開発起動にも[環境変数](../operations/setup.md)が必要です。
+`dev` は本番と同じPostgreSQL用の[環境変数](../operations/setup.md)を使用します。PGliteでの手動検証には上記の `local` を使ってください。
 
 ## ファイル配置
 

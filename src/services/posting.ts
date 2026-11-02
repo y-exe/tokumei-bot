@@ -13,8 +13,7 @@ import { deliveryError } from './delivery-error.js';
 import { checkMediaSafety } from '../media/safety-policy.js';
 import { SafeHttp, MAX_DOWNLOAD_BYTES } from '../media/http.js';
 import { videoSourceUrl } from '../media/service.js';
-import { isBotAdmin } from '../domain/permissions.js';
-import { stripXSharingParameters } from '../domain/urls.js';
+import { cleanSharedUrls } from '../domain/urls.js';
 
 export class Posting {
   private queue = new SerialQueue(Number.POSITIVE_INFINITY);
@@ -31,9 +30,8 @@ export class Posting {
   constructor(readonly store: Store, readonly secrets: SecretBox,
     readonly threadIdFor: (guildId: string, channelId: string) => Promise<string | undefined> = async () => undefined) {}
   async preflight(input: Pick<PostInput, 'guildId' | 'channelId' | 'userId' | 'operationId' | 'text'>, config?: Config, consume = false): Promise<void> {
-    if (isBotAdmin(input.userId)) return;
     config ??= (await this.store.settings(input.guildId, input.channelId, true)).config;
-    const text = stripXSharingParameters(input.text);
+    const text = cleanSharedUrls(input.text, config.policy.cleanUrls !== false);
     const body = text.normalize('NFKC').trim();
     await this.store.checkFlood(this.secrets.fingerprint('user', input.guildId, input.userId), {
       chars: [...text].length,
@@ -43,12 +41,12 @@ export class Posting {
     }, config.policy, consume);
   }
   async publish(input: PostInput): Promise<string> {
-    input = { ...input, text: stripXSharingParameters(input.text), source: input.source ? stripXSharingParameters(input.source) : input.source };
     return this.queue.run(`${input.guildId}:${input.channelId}`, input.media.reduce((sum, file) => sum + mediaBytes(file), 0), () => this.publishLocked(input));
   }
   private async publishLocked(input: PostInput): Promise<string> {
     const settings = await this.store.settings(input.guildId, input.channelId, true);
     if (!settings.enabled || !settings.webhook) throw new UserError('このチャンネルには匿名投稿が設置されていません。');
+    input = { ...input, text: cleanSharedUrls(input.text,settings.config.policy.cleanUrls !== false), source: input.source ? cleanSharedUrls(input.source,settings.config.policy.cleanUrls !== false) : input.source };
     validatePost(input, settings.config);
     await this.preflight(input, settings.config);
     for (const file of input.media) await checkMediaSafety(file.data, settings.config, file.name, '', file.safety, file.safetyInput);
@@ -58,7 +56,7 @@ export class Posting {
     }
     const reply=input.replyTo?await this.store.post(input.guildId,input.channelId,input.replyTo):null;
     if (input.replyTo && !reply) throw new UserError('返信先が削除済みか保存期限を過ぎています。');
-    const linked=settings.config.policy.retentionDays===0?input.text:await this.linkReferences(input.text,input.guildId,input.channelId,new Date());
+    const linked=settings.config.policy.retentionDays===0 || settings.config.policy.linkReferences === false ? input.text : await this.linkReferences(input.text,input.guildId,input.channelId,new Date());
     const content = postContent(linked, input.source, input.replyTo, input.guildId, input.channelId,reply?.anonymous_id, input.videoLinks);
     if (content.length > 2000) throw new UserError('出典・返信リンクを含めて2000文字以内になるように本文を短くしてください。');
     await this.preflight(input, settings.config, true);
@@ -148,9 +146,9 @@ export class Posting {
     return post;
   }
   async edit(guildId: string, channelId: string, messageId: string, userId: string, content: string): Promise<void> {
-    content = stripXSharingParameters(content);
     const post = await this.own(guildId, channelId, messageId, userId);
     const settings = await this.store.settings(guildId, channelId, true);
+    content = cleanSharedUrls(content, settings.config.policy.cleanUrls !== false);
     this.validateEdit(post, content, settings.config);
     const credential = post.legacy_webhook ?? post.delivery_webhook ?? settings.webhook;
     if (!credential) throw new UserError('投稿用Webhookが見つかりません。管理者に連絡してください。');
@@ -158,10 +156,11 @@ export class Posting {
     try {
       const threadId = await this.threadIdFor(guildId, channelId);
       const message = await webhook.fetchMessage(messageId, { threadId });
-      const linked=settings.config.policy.retentionDays===0?content:await this.linkReferences(content,guildId,channelId,post.created_at);
+      const linked=settings.config.policy.retentionDays===0 || settings.config.policy.linkReferences === false ? content : await this.linkReferences(content,guildId,channelId,post.created_at);
       const reply=post.reply_to?await this.store.post(guildId,channelId,post.reply_to):null;
       const previousNumber=message.content?.match(/^\[>>(\d{1,4})\]/)?.[1];
-      const rendered = post.layout === 'legacy' ? linked : postContent(linked, post.source ?? undefined, post.reply_to ?? undefined, guildId, channelId,reply?.anonymous_id??(previousNumber?Number(previousNumber):undefined), post.videoLinks);
+      const source = post.source ? cleanSharedUrls(post.source, settings.config.policy.cleanUrls !== false) : undefined;
+      const rendered = post.layout === 'legacy' ? linked : postContent(linked, source, post.reply_to ?? undefined, guildId, channelId,reply?.anonymous_id??(previousNumber?Number(previousNumber):undefined), post.videoLinks);
       if (post.layout !== 'v2' && rendered.length > 2000) throw new UserError('出典・返信リンクを含めて2000文字以内にしてください。');
       await webhook.editMessage(messageId, post.layout !== 'v2' ? { content: rendered, threadId,
         allowedMentions: { parse: [] } } : { components: [postCard(rendered, post.media, settings.config.panel.color)], threadId,

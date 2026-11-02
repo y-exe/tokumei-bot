@@ -1,5 +1,5 @@
-import 'dotenv/config';
-import sharp from 'sharp';
+import './infra/environment.js';
+import sharp from './media/sharp.js';
 import { ActivityType, Client, Events, GatewayIntentBits, Options } from 'discord.js';
 import { App } from './app.js';
 import { Store } from './infra/store.js';
@@ -32,10 +32,10 @@ await initializeSafety();
 await initializeNudity();
 await initializeAnimeNudity();
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
-  presence: { activities: [{ name: '/setup | tokumei-bot by yexe', state: '/setup | tokumei-bot by yexe', type: ActivityType.Custom }] },
+  presence: { activities: [{ name: '/setup | tokumei-bot by yexe', state: `${process.env.LOCAL_DEVELOPMENT === '1' ? '[テスト] ' : ''}/setup | tokumei-bot by yexe`, type: ActivityType.Custom }] },
   makeCache: Options.cacheWithLimits({ ...Options.DefaultMakeCacheSettings, MessageManager: 0 }) });
 const app = new App(client, store, secrets, new MediaService(new SafeHttp(), new WorkQueue(concurrency)));
-const health = healthServer(client, store, Number(process.env.HEALTH_PORT ?? 3000));
+const health = healthServer(client, store, Number(process.env.HEALTH_PORT ?? 3000), process.env.LOCAL_DEVELOPMENT === '1' ? '127.0.0.1' : '0.0.0.0');
 const lookup = process.env.LOOKUP_TAILSCALE_ORIGIN ? lookupServer(store,client,process.env.LOOKUP_TAILSCALE_ORIGIN,(process.env.LOOKUP_ALLOWED_TAILSCALE_LOGINS??'').split(',').map(login=>login.trim()).filter(Boolean),Number(process.env.LOOKUP_PORT??8765)) : undefined;
 client.on(Events.MessageCreate, message => {
   void guardChannel(message, store, app.panels).catch(() => console.error('匿名チャンネルの通常投稿を確認できませんでした。'));
@@ -69,7 +69,12 @@ const cleanup = setInterval(() => {
     .map(url=>heartbeat(url,client.isReady()))).catch(() => console.error('監視への応答に失敗しました。'));
 }, 60_000);
 cleanup.unref();
-async function shutdown(): Promise<void> { clearInterval(cleanup); health.close(); lookup?.close(); client.destroy(); await store.close(); }
-process.once('SIGINT', () => { void shutdown(); });
-process.once('SIGTERM', () => { void shutdown(); });
+let stopping: Promise<void> | undefined;
+export function shutdown(): Promise<void> {
+  return stopping ??= (async () => { clearInterval(cleanup); health.close(); lookup?.close(); client.destroy(); await store.close(); })();
+}
+if (process.env.LOCAL_DEVELOPMENT !== '1') {
+  process.once('SIGINT', () => { void shutdown(); });
+  process.once('SIGTERM', () => { void shutdown(); });
+}
 await client.login(token);

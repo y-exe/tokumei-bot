@@ -34,9 +34,9 @@ export function validatePost(input: PostInput, config: Config): void {
   const hasMedia = input.media.length > 0 || !!input.videoLinks?.length;
   if (!input.text.trim() && !hasMedia) throw new UserError('本文か画像を入力してください。');
   if (!config.content.text && !hasMedia) throw new UserError('このチャンネルでは画像の添付が必要です。');
-  if (hasMedia && !config.content.images) throw new UserError('このチャンネルはテキスト専用です。');
+  if (hasMedia && !input.source && !config.content.images) throw new UserError('このチャンネルではファイルの直接添付を利用できません。');
   if (hasMedia && input.text.trim() && !config.content.caption) throw new UserError('このチャンネルでは画像に説明文を付けられません。');
-  if (input.source && !config.content.urls) throw new UserError('このチャンネルではURL変換を利用できません。画像を直接添付してください。');
+  if (input.source && !config.content.urls) throw new UserError('このチャンネルではURL変換を利用できません。');
   if (input.media.length + (input.videoLinks?.length ?? 0) > 10) throw new UserError('Discordの上限により、1回に添付できるファイルは10個までです。');
 }
 

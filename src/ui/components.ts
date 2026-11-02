@@ -14,8 +14,8 @@ export function row(...buttons: ButtonBuilder[]): ActionRowBuilder<ButtonBuilder
 export function text(value: string): TextDisplayBuilder { return new TextDisplayBuilder().setContent(value); }
 export const colors = { info: 0x3498db, settings: 0x3498db, success: 0x2ecc71, warning: 0xf39c12, danger: 0xe53935, report: 0xe74c3c, preview: 0x3498db } as const;
 export const legalLinks = '[利用規約](https://github.com/y-exe/tokumei-bot/blob/main/TERMS_OF_SERVICE.md)・[プライバシーポリシー](https://github.com/y-exe/tokumei-bot/blob/main/PRIVACY_POLICY.md)';
-export function card(title: string, description: string, color: number = colors.info): ContainerBuilder {
-  const emoji = color === colors.success ? uiEmoji.check : color === colors.warning ? uiEmoji.warning : color === colors.danger ? uiEmoji.error : uiEmoji.info;
+export function card(title: string, description: string, color: number = colors.info, icon?: string): ContainerBuilder {
+  const emoji = icon ?? (color === colors.success ? uiEmoji.check : color === colors.warning ? uiEmoji.warning : color === colors.danger ? uiEmoji.error : uiEmoji.info);
   return new ContainerBuilder().setAccentColor(color).addTextDisplayComponents(text(`## ${emoji} ${title}\n${description}`));
 }
 export function payload(components: (ContainerBuilder | ActionRowBuilder<ButtonBuilder>)[], ephemeral = true) {
@@ -30,13 +30,8 @@ export function panel(config: Config, preview = false): ContainerBuilder {
   if (config.panel.image) result.addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(config.panel.image)));
   result.addSeparatorComponents(new SeparatorBuilder());
   result.addActionRowComponents(panelButtons(config, preview));
-  result.addTextDisplayComponents(text(`-# ${legalLinks}`));
-  if (config.panel.style === 'embed' || config.panel.metadata === false) {
-    if (config.panel.footer) result.addTextDisplayComponents(text(`-# ${config.panel.footer}`));
-    return result;
-  }
-  const format = !config.content.text ? config.content.urls ? '画像必須・URL変換可' : '画像の直接添付のみ' : config.content.images ? 'テキスト・画像' : 'テキスト';
-  result.addTextDisplayComponents(text(`-# ${format} · 投稿ログ: ${retentionLabel(config.policy.retentionDays)}${config.panel.footer ? `\n-# ${config.panel.footer}` : ''}`));
+  result.addTextDisplayComponents(text(`-# ${legalLinks}${preview && config.panel.footer ? `\n-# ${config.panel.footer}` : ''}`));
+  if (!preview && config.panel.footer) result.addTextDisplayComponents(text(`-# ${config.panel.footer}`));
   return result;
 }
 export function panelButtons(config: Config, preview = false): ActionRowBuilder<ButtonBuilder> {
@@ -51,7 +46,7 @@ export function panelButtons(config: Config, preview = false): ActionRowBuilder<
   };
   if (config.content.text) actions.push(make('text',ButtonStyle.Primary));
   if (config.content.images) actions.push(make('image',config.content.text?ButtonStyle.Secondary:ButtonStyle.Primary));
-  if (config.content.urls && config.content.providers.length && config.panel.urlButton !== false) actions.push(make('url',ButtonStyle.Secondary));
+  if (config.content.urls && config.content.providers.length) actions.push(make('url',ButtonStyle.Secondary));
   actions.push(make('help',ButtonStyle.Secondary));
   if (preview) actions.forEach(action => action.setDisabled(true));
   return row(...actions);
@@ -63,8 +58,11 @@ export function help(config: Config): ContainerBuilder {
   const result = card('サーバー固有ルール・使い方', config.policy.rules || 'サーバーのルールに従ってご利用ください。', colors.info);
   result.addSeparatorComponents(new SeparatorBuilder());
   result.addTextDisplayComponents(text(`### ${uiEmoji.check} 投稿方法\n案内のボタン、または \`/post\`・\`/image\`・\`/url\` から投稿できます。\n**編集・削除**は \`/mine\`、または投稿を右クリック・長押しして「アプリ」から行えます。\n${uiEmoji.flag} **通報・返信**も「アプリ」メニューから選べます。`));
-  const privacy=config.policy.retentionDays===0?'**投稿者対応・本文・添付情報はBotのDBに保存しません。**\n連投対策用の照合情報は一時保存します。投稿履歴を保存しないため、Botによる本人編集・削除・通報は利用できません。':`投稿ログ: **${retentionLabel(config.policy.retentionDays)}**。通報内容: **${retentionLabel(config.policy.reportRetentionDays)}**。\n${uiEmoji.info} Botのデータ管理者は保存情報へアクセスできます。`;
-  result.addTextDisplayComponents(text(`### ${uiEmoji.info} 匿名性と保存\n**他のメンバーに投稿者名は表示されません。**\n${privacy}\nDiscord上の投稿はこの設定では削除されません。匿名の表示IDは実ユーザーIDではありません。`));
+  result.addSeparatorComponents(new SeparatorBuilder());
+  result.addTextDisplayComponents(text(`### ${uiEmoji.warning} 画像・動画の投稿ルール\n**NSFW（性的な露出）**：${config.content.allowNsfw ? '許可' : '拒否'}\n**NSFL（グロ・流血）**：${config.content.allowNsfl ? '許可' : '拒否'}\n拒否に設定されているカテゴリは、画像・動画の安全判定で確認します。`));
+  result.addSeparatorComponents(new SeparatorBuilder());
+  const privacy=config.policy.retentionDays===0?'**投稿者対応・本文・添付情報はBotのDBに保存しません。**\n連投対策用の照合情報は一時保存します。投稿履歴を保存しないため、Botによる本人編集・削除・通報は利用できません。':`投稿ログ: **${retentionLabel(config.policy.retentionDays)}**。通報内容: **${retentionLabel(config.policy.reportRetentionDays)}**。`;
+  result.addTextDisplayComponents(text(`### ${uiEmoji.info} 匿名性と保存\n**他のメンバーに投稿者名は表示されません。**\n${privacy}\n-# Discord上の投稿はこの設定では削除されません。匿名の表示IDは実ユーザーIDではありません。`));
   if (config.policy.rulesUrl) result.addActionRowComponents(row(new ButtonBuilder().setLabel('サーバールールを開く').setStyle(ButtonStyle.Link).setURL(config.policy.rulesUrl)));
   return result;
 }

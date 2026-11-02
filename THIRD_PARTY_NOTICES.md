@@ -1,4 +1,14 @@
-# モデルの出典
+# モデル・外部ツールの出典
+
+## gallery-dl
+
+- 出典: https://codeberg.org/mikf/gallery-dl （GitHubミラー: https://github.com/mikf/gallery-dl）
+- 作者: Mike Fährmannほか
+- 使用バージョン: 1.32.19
+- ライセンス: GPL-2.0-only
+- ソースとライセンス本文: https://github.com/mikf/gallery-dl/tree/v1.32.19
+
+本家Pythonパッケージを別プロセスで使用し、公開メディアのURLを抽出します。画像のダウンロード・加工・安全判定はBot側で実行します。
 
 ## Anime Censor Detection v1.0 s
 

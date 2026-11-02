@@ -9,7 +9,7 @@ import { SecretBox } from '../src/infra/secrets.js';
 import { Store } from '../src/infra/store.js';
 import { Posting } from '../src/services/posting.js';
 import { FloodControlError } from '../src/domain/errors.js';
-import { editorModal, limitsView } from '../src/ui/editor.js';
+import { editorModal, otherView } from '../src/ui/editor.js';
 
 const policy = { ...defaults.policy, cooldown: 0 };
 const empty = (): FloodState => ({ events: [], blockedUntil: 0 });
@@ -78,7 +78,7 @@ test('設定の旧形式に初期値を補い、部分上書き・無効化・�
   let state = empty();
   for (let i = 0; i < 10; i++) { const result = floodDecision(state, { ...event(String(i), 10000), hash: 'same' }, disabled, i, true); assert.equal(result.denied, false); state = result.state; }
   const modal = editorModal('test', 'spam', defaults).toJSON();
-  assert.equal(modal.components?.length, 5); assert.ok(JSON.stringify(limitsView('test')).includes('連投対策'));
+  assert.equal(modal.components?.length, 5); assert.ok(JSON.stringify(otherView('test',{scope:'guild',value:defaults} as never)).includes('連投対策'));
 });
 
 let db: PGlite; let server: PGLiteSocketServer; let store: Store;
@@ -87,6 +87,16 @@ before(async () => {
   await server.start(); store = new Store(`postgresql://postgres:postgres@${server.getServerConn()}/postgres`); await store.initialize();
 });
 after(async () => { await store.close(); await server.stop(); await db.close(); });
+
+test('Bot管理者にも最短投稿間隔と連投上限を同じように適用する',async()=>{
+  const posting=new Posting(store,new SecretBox(randomBytes(32).toString('base64')));
+  const config=resolveConfig(defaults,{policy:{cooldown:5,postsPerMinute:1}});
+  const input={guildId:'admin-limits',channelId:'c',userId:'483307286513582090',operationId:'first',text:'最初'};
+  await posting.preflight(input,config,true);
+  await assert.rejects(posting.preflight({...input,operationId:'second',text:'次の投稿'},config,true),/秒後/);
+  config.policy.cooldown=0;
+  await assert.rejects(posting.preflight({...input,operationId:'third',text:'さらに投稿'},config,true),FloodControlError);
+});
 
 test('同時投稿を排他制御して上限を守り、文字数制限の拒否もDBに確定する', async () => {
   const results = await Promise.allSettled(Array.from({ length: 6 }, (_, i) => store.checkFlood('concurrent', event(String(i)), policy, true)));

@@ -10,6 +10,17 @@ import { SerialQueue } from '../src/infra/serial.js';
 
 const input: PostInput = { guildId: '100000000000000001', channelId: '200000000000000001', userId: '300000000000000001', operationId: '400000000000000001', roles: [], text: 'こんにちは', media: [] };
 const image = { data: Buffer.from('fixture'), name: 'image.jpg', kind: 'image' as const };
+
+test('URL取得と直接添付を独立して許可し、URL画像・動画だけの投稿を受け付ける',()=>{
+  const urlOnly=resolveConfig(defaults,{content:{text:false,images:false,urls:true}});
+  const source='https://example.com/image.jpg';
+  assert.doesNotThrow(()=>validatePost({...input,text:'',media:[image],source},urlOnly));
+  assert.doesNotThrow(()=>validatePost({...input,text:'',media:[],source,videoLinks:['https://example.com/video.mp4']},urlOnly));
+  assert.throws(()=>validatePost({...input,text:'',media:[image]},urlOnly),/直接添付/);
+  const imageOnly=resolveConfig(defaults,{content:{text:false,images:true,urls:false}});
+  assert.doesNotThrow(()=>validatePost({...input,text:'',media:[image]},imageOnly));
+  assert.throws(()=>validatePost({...input,text:'',media:[image],source},imageOnly),/URL変換/);
+});
 test('プリセットごとにテキスト・画像・URLの制約を全入口用の検査で守る', () => {
   const chat = resolveConfig(defaults, presetOverrides('chat'));
   assert.doesNotThrow(() => validatePost(input, chat));
@@ -48,7 +59,7 @@ test('URL動画だけでもメディア投稿として扱い、説明文・テ�
   const noCaption = resolveConfig(defaults, { content: { caption: false } });
   assert.throws(() => validatePost({ ...video, text: '説明' }, noCaption), /説明文/);
   const textOnly = resolveConfig(defaults, { content: { images: false, urls: false } });
-  assert.throws(() => validatePost(video, textOnly), /テキスト専用/);
+  assert.throws(() => validatePost(video, textOnly), /URL変換/);
   assert.throws(() => validatePost({ ...video, media: Array(10).fill(image) }, defaults), /10個/);
 });
 test('設定は深い継承、厳密なインポート、秘密情報排除を行う', () => {
@@ -67,7 +78,7 @@ test('設定は深い継承、厳密なインポート、秘密情報排除を�
 });
 test('無効な設定変更は編集中の下書きを壊さない', () => {
   const session = { scope: 'channel', original: { base: defaults }, value: {} } as EditorSession;
-  assert.throws(() => editSection(session, 'content', { text: false, images: false }));
+  assert.throws(() => editSection(session, 'content', { text: false, images: false, urls: false }));
   assert.deepEqual(session.value, {});
 });
 test('下書きは本人とサーバーで分離し、容量・期限を制限する', async () => {

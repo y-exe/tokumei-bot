@@ -1,7 +1,7 @@
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import sharp, { type Metadata } from 'sharp';
+import sharp, { type Metadata } from './sharp.js';
 import type { Config } from '../domain/config.js';
 import { UserError, MediaSafetyError } from '../domain/errors.js';
 import { createHash } from 'node:crypto';

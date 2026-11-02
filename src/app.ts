@@ -6,7 +6,7 @@ import {
 import { ZodError } from 'zod';
 import { isBotAdmin } from './domain/permissions.js';
 import { isPostingChannel, type PostingChannel } from './domain/channels.js';
-import { defaults, exportTemplate, importTemplate, presetOverrides, resolveConfig, parseRetention, allowsDirectPosts,isRequestMode, type Config, type Preset } from './domain/config.js';
+import { defaults, defaultPanelDescription, isDefaultPanelDescription, exportTemplate, importTemplate, presetOverrides, resolveConfig, parseRetention, allowsDirectPosts,isRequestMode, type Config } from './domain/config.js';
 import { UserError, MediaSafetyError, BlockedWordError, FloodControlError, errorMessage } from './domain/errors.js';
 import { maskBlockedWords } from './domain/blocked-words.js';
 import { mediaBytes, validateText, type PostInput } from './domain/validation.js';
@@ -16,7 +16,7 @@ import type { MediaService } from './media/service.js';
 import { Posting } from './services/posting.js';
 import { Panels } from './services/panels.js';
 import { button, card, colors, help, panelPayload, payload, row, text } from './ui/components.js';
-import { editSection, editorConfig, editorModal, editorView, limitsView, managementView, buttonSettingsView, safetyView, type EditorSession } from './ui/editor.js';
+import { editSection, editorConfig, editorModal, editorView, setupView, reuseSetupView, backupsView, resetConfirmationView, resumeConfirmationView, otherView, managementView, buttonSettingsView, safetyView, type EditorSession } from './ui/editor.js';
 import { input, postModal } from './ui/modals.js';
 import { previewView, type PreviewSession } from './ui/post.js';
 import { Sessions } from './ui/sessions.js';
@@ -27,6 +27,11 @@ import { bugReportUrl, reportOperation } from './ui/bug-report.js';
 import { blockedTextView, type TextAction, type TextRecoverySession } from './ui/text-recovery.js';
 
 const emptyMentions = { parse: [] as ('users' | 'roles' | 'everyone')[] };
+const freshSetup = () => {
+  const value = presetOverrides('chat');
+  value.content = {...value.content,urls:false,allowNsfw:false,allowNsfl:false}; value.policy = {rules:defaults.policy.rules};
+  return value;
+};
 type UIInteraction = RepliableInteraction;
 
 export class App {
@@ -48,11 +53,29 @@ export class App {
   roles(interaction: UIInteraction): string[] {
     return interaction.member instanceof GuildMember ? [...interaction.member.roles.cache.keys()] : interaction.member?.roles ?? [];
   }
+  setupSourceRoles(interaction: UIInteraction): string[] | undefined {
+    return isBotAdmin(interaction.user.id)||interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)?undefined:this.roles(interaction);
+  }
+  async setupSources(interaction: UIInteraction, offset=0) {
+    const sources=await this.store.savedSetups(interaction.guildId!,interaction.channelId!,offset,this.setupSourceRoles(interaction));
+    return sources.map(source=>{
+      const channel=this.client.channels?.cache.get(source.channelId);
+      return {...source,name:channel&&'name' in channel&&typeof channel.name==='string'?channel.name:source.name};
+    });
+  }
   async requireManager(interaction: UIInteraction, channelId = interaction.channelId!): Promise<void> {
     if (isBotAdmin(interaction.user.id)) return;
     const settings = await this.store.settings(interaction.guildId!, channelId, true);
     if (interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild) || this.roles(interaction).some(role => settings.config.moderation.managerRoles.includes(role))) return;
     throw new UserError('サーバー管理権限、または設定された管理ロールが必要です。');
+  }
+  async backupSource(interaction: UIInteraction, session: EditorSession, id: string) {
+    const backup = session.backups?.find(item => item.id === id);
+    if (!backup) throw new UserError('一覧にあるバックアップを選択してください。');
+    if (backup.channelId === null) {
+      if (!isBotAdmin(interaction.user.id) && !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) throw new UserError('サーバー標準のバックアップにはサーバー管理権限が必要です。');
+    } else await this.requireManager(interaction,backup.channelId);
+    return backup;
   }
   async channel(guildId: string, channelId: string, purpose = '操作先'): Promise<PostingChannel> {
     const channel = await this.client.channels.fetch(channelId).catch(error => {
@@ -134,18 +157,27 @@ export class App {
         await this.requireManager(interaction);
         const setup = interaction.commandName === 'setup';
         const scope = setup ? 'channel' : interaction.options.getString('scope') === 'guild' ? 'guild' : 'channel';
-        const value = setup ? presetOverrides(interaction.options.getString('mode', true) as Preset) : scope === 'guild' ? settings.base : settings.overrides;
-        const session: EditorSession = { owner: interaction.user.id, guildId: interaction.guildId!, channelId: interaction.channelId!, original: settings, scope, value: structuredClone(value), installing: setup };
+        if (scope === 'guild' && !isBotAdmin(interaction.user.id) && !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) throw new UserError('サーバー標準の変更にはサーバー管理権限が必要です。');
+        const value = setup ? freshSetup() : scope === 'guild' ? settings.base : settings.overrides;
+        const session: EditorSession = { owner: interaction.user.id, guildId: interaction.guildId!, channelId: interaction.channelId!, original: settings, scope, value: structuredClone(value), installing: setup, setupPage: setup ? 0 : undefined,
+          setupAvatar: setup ? this.client.user?.displayAvatarURL({ size: 128 }) : undefined };
+        if (setup) {
+          session.setupSources = await this.setupSources(interaction);
+          session.choosingSetup = session.setupSources.length>0;
+          if(session.setupSources.some(source=>source.channelId===session.channelId)){session.reuseSource=session.channelId;session.value=structuredClone(settings.config);}
+        }
+        session.resumeConfirmation = !setup && scope === 'channel' && !settings.enabled;
         const id = this.editors.create(session);
-        await this.respond(interaction, editorView(id, session)); return;
+        await this.respond(interaction, session.resumeConfirmation ? resumeConfirmationView(id) : session.choosingSetup ? reuseSetupView(id,session) : setup ? setupView(id, session) : editorView(id, session)); return;
       }
       case 'help': await this.respond(interaction, [help(settings.config)]); return;
       case 'stop': {
         await this.requireManager(interaction);
         await this.store.disable(interaction.guildId!, interaction.channelId!);
         const channel = await this.channel(interaction.guildId!, interaction.channelId!);
-        if (settings.panelId) await channel.messages.edit(settings.panelId, { content:null,embeds:[], components: [card('匿名投稿は停止中です', '管理者が受付を再開するまで投稿できません。', colors.warning)], flags: MessageFlags.IsComponentsV2 }).catch(() => undefined);
-        await this.respond(interaction, [card('受付を停止しました', '過去の投稿の本人操作は引き続き利用できます。再開は /setup から行えます。', colors.success)]); return;
+        const stopped = await this.store.settings(interaction.guildId!,interaction.channelId!,true);
+        if (stopped.panelId) await channel.messages.edit(stopped.panelId, { content:null,embeds:[], components: [card('匿名投稿は停止中です', '管理者が受付を再開するまで投稿できません。', colors.warning)], flags: MessageFlags.IsComponentsV2 }).catch(() => undefined);
+        await this.respond(interaction, [card('受付を停止しました', '過去の投稿の本人操作は引き続き利用できます。再開は /setup または案内の編集から行えます。', colors.success)]); return;
       }
       case 'mine': await this.mine(interaction); return;
       case 'reports': {
@@ -203,8 +235,8 @@ export class App {
       else await interaction.deleteReply().catch(() => console.error('投稿済みの操作画面を閉じられませんでした。'));
     });
   }
-  async prepareUrl(interaction: UIInteraction, url: string, content: string): Promise<void> {
-    await this.withBlockedText(interaction, content, { kind: 'url', url }, async () => {
+  async prepareUrl(interaction: UIInteraction, url: string, content: string, replyTo?: string): Promise<void> {
+    await this.withBlockedText(interaction, content, { kind: 'url', url, replyTo }, async () => {
       const settings = await this.store.settings(interaction.guildId!, interaction.channelId!, true);
       if (!settings.enabled) throw new UserError('このチャンネルには匿名投稿が設置されていません。');
       validateText(url, settings.config, 1800, 'source'); validateText(content, settings.config);
@@ -212,7 +244,7 @@ export class App {
       await this.posting.preflight({ guildId: interaction.guildId!, channelId: interaction.channelId!, userId: interaction.user.id, operationId: interaction.id, text: content }, settings.config);
       const result = await this.media.fromUrl(url, settings.config);
       const session: PreviewSession = { owner: interaction.user.id, guildId: interaction.guildId!, channelId: interaction.channelId!,
-        files: result.files, source: result.source, text: content, warnings: result.warnings, selected: result.files.map((_, index) => index), sending: false, videoLinks: result.videoLinks };
+        files: result.files, source: result.source, text: content, warnings: result.warnings, selected: result.files.map((_, index) => index), sending: false, videoLinks: result.videoLinks, replyTo };
       const id = this.previews.create(session, result.files.reduce((sum, file) => sum + mediaBytes(file), 0));
       await interaction.editReply({ ...payload(previewView(id, session, settings.config.content.caption)), flags: MessageFlags.IsComponentsV2,
         files: session.files.map(file => new AttachmentBuilder(file.data, { name: file.name })) });
@@ -261,7 +293,7 @@ export class App {
     this.textRecoveries.delete(id);
     const action = session.action;
     if (action.kind === 'post') await this.send(interaction, content, action.media, action.source, action.replyTo, action.videoLinks);
-    else if (action.kind === 'url') await this.prepareUrl(interaction, action.url, content);
+    else if (action.kind === 'url') await this.prepareUrl(interaction, action.url, content, action.replyTo);
     else if (action.kind === 'edit') await this.editPost(interaction, action.messageId, content);
     else await this.updateCaption(interaction, action.previewId, content, true);
   }
@@ -310,7 +342,7 @@ export class App {
       if (action === 'send') {
         session.sending = true;
         await interaction.deferUpdate();
-        try { await this.send(interaction, session.text, session.selected.map(index => session.files[index]!), session.source, undefined, session.videoLinks); this.previews.delete(id); }
+        try { await this.send(interaction, session.text, session.selected.map(index => session.files[index]!), session.source, session.replyTo, session.videoLinks); this.previews.delete(id); }
         catch (error) { session.sending = false; throw error; }
         return;
       }
@@ -382,24 +414,123 @@ export class App {
     if (prefix === 'dismiss') { await this.respond(interaction, [card('キャンセルしました', '処置は実行されていません。')]); return; }
   }
   async configure(interaction: import('discord.js').ButtonInteraction | import('discord.js').AnySelectMenuInteraction, id: string, action: string): Promise<void> {
+    if (action === 'tools' && interaction.isStringSelectMenu()) {
+      const selected = interaction.values[0];
+      if (!selected || !['management', 'filter', 'export', 'import'].includes(selected)) throw new UserError('設定する項目を選択してください。');
+      action = selected;
+    }
     const session = this.editors.get(id, interaction.user.id, interaction.guildId!);
     await this.requireManager(interaction, session.channelId);
     if (session.scope === 'guild' && !isBotAdmin(interaction.user.id) && !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) throw new UserError('サーバー標準の変更にはサーバー管理権限が必要です。');
+    if (action === 'other') session.returnToOther = true;
+    if (action === 'back') session.returnToOther = false;
+    if (action === 'resumeconfirm') {
+      if (!session.resumeConfirmation) throw new UserError('再開の確認画面から操作してください。');
+      session.resumeConfirmation = false; session.installing = true; session.resuming = true;
+      await interaction.update({components:editorView(id,session),allowedMentions:emptyMentions});return;
+    }
+    if (session.resumeConfirmation && action !== 'cancel') throw new UserError('先に匿名投稿の再開を確認してください。');
+    if (!action.startsWith('restore')) {
+      session.pendingRevision = undefined; session.selectedBackup = undefined; session.deletingBackup = false;
+    }
+    if (action.startsWith('restore')) {
+      if (action === 'restorecancel') {
+        session.pendingRevision = undefined; session.selectedBackup = undefined; session.deletingBackup = false;
+        await interaction.update({components:session.choosingSetup ? reuseSetupView(id,session) : session.setupPage !== undefined ? setupView(id,session) : session.returnToOther ? otherView(id,session) : editorView(id,session),allowedMentions:emptyMentions}); return;
+      }
+      if (action === 'restoreapply') {
+        if (!session.selectedBackup || !session.pendingRevision) throw new UserError('設定バックアップの確認画面から選択してください。');
+        const backup = await this.backupSource(interaction,session,session.selectedBackup);
+        const saved = await this.store.settingsBackup(session.guildId,backup.channelId,session.selectedBackup);
+        if (!saved) throw new UserError('このバックアップは削除されています。一覧を開き直してください。');
+        editorConfig({...session,value:saved}); session.value = saved;
+        session.pendingRevision = undefined; session.selectedBackup = undefined; session.deletingBackup = false;
+        session.choosingSetup = false;
+        if (session.setupPage !== undefined || session.installing && !session.resuming) session.setupPage = 2;
+        await interaction.update({components:session.setupPage !== undefined ? setupView(id,session) : session.returnToOther ? otherView(id,session) : editorView(id,session),allowedMentions:emptyMentions}); return;
+      }
+      if (action === 'restore') { session.selectedBackup = undefined; session.pendingRevision = undefined; session.deletingBackup = false; }
+      else if (action === 'restoreselect' && interaction.isStringSelectMenu()) {
+        const selected = interaction.values[0];
+        if (!selected) throw new UserError('一覧にあるバックアップを選択してください。');
+        const backup = await this.backupSource(interaction,session,selected);
+        const saved = await this.store.settingsBackup(session.guildId,backup.channelId,selected);
+        if (!saved) throw new UserError('このバックアップは削除されています。一覧を開き直してください。');
+        editorConfig({...session,value:saved}); session.selectedBackup = selected; session.pendingRevision = saved; session.deletingBackup = false;
+      } else if (action === 'restoredelete' || action === 'restoredeleteconfirm' || action === 'restoredeletecancel') {
+        if (!session.selectedBackup || !session.pendingRevision) throw new UserError('先に削除するバックアップを選択してください。');
+        if (action === 'restoredeleteconfirm') {
+          if (!session.deletingBackup) throw new UserError('バックアップの削除確認画面を開いてください。');
+          const backup = await this.backupSource(interaction,session,session.selectedBackup);
+          await this.store.deleteSettingsBackup(session.guildId,backup.channelId,session.selectedBackup);
+          session.pendingRevision = undefined; session.selectedBackup = undefined; session.deletingBackup = false;
+        } else session.deletingBackup = action === 'restoredelete';
+      } else throw new UserError('設定バックアップの一覧を開き直してください。');
+      session.backups = await this.store.settingsBackups(session.guildId,this.setupSourceRoles(interaction));
+      await interaction.update({components:backupsView(id,session),allowedMentions:emptyMentions}); return;
+    }
+    if (['newsetup','reusesource','reuseapply','reuseedit','reuseprev','reusenext'].includes(action)) {
+      if(!session.choosingSetup)throw new UserError('保存済み設定の選択画面を開き直してください。');
+      if(action==='newsetup') {session.value=freshSetup();session.choosingSetup=false;session.reuseSource=undefined;session.setupPage=0;}
+      else if(action==='reuseprev'||action==='reusenext') {
+        const page=session.setupSourcePage??0;
+        if(action==='reusenext'&&(session.setupSources?.length??0)<=25)throw new UserError('次の候補はありません。');
+        session.setupSourcePage=Math.max(0,page+(action==='reusenext'?1:-1));
+        session.setupSources=await this.setupSources(interaction,session.setupSourcePage*25);
+      } else if(action==='reusesource'&&interaction.isStringSelectMenu()) {
+        const source=interaction.values[0];
+        if(!source||!session.setupSources?.slice(0,25).some(item=>item.channelId===source))throw new UserError('候補にある設定を選んでください。');
+        await this.requireManager(interaction,source);
+        const config=await this.store.savedSetup(session.guildId,source);
+        if(!config)throw new UserError('保存済みの設定が見つかりません。/setupから開き直してください。');
+        session.value=config;session.reuseSource=source;
+      } else if(action==='reuseapply'||action==='reuseedit') {
+        if(!session.reuseSource)throw new UserError('使いたい設定を選んでください。');
+        await this.requireManager(interaction,session.reuseSource);
+        if(action==='reuseapply'){await interaction.deferUpdate();await this.saveEditor(interaction,id,session);return;}
+        session.choosingSetup=false;session.setupPage=2;
+      }
+      await interaction.update({components:session.choosingSetup?reuseSetupView(id,session):setupView(id,session),allowedMentions:emptyMentions});return;
+    }
+    if (!['reset', 'resetconfirm', 'resetcancel'].includes(action)) session.resetConfirmation = false;
+    if (action === 'reset') {
+      session.resetConfirmation = true;
+      await interaction.update({ components: resetConfirmationView(id, session), allowedMentions: emptyMentions }); return;
+    }
+    if (action === 'resetconfirm' || action === 'resetcancel') {
+      if (action === 'resetconfirm') {
+        if (!session.resetConfirmation) throw new UserError('先に「標準に戻す」または「初期値に戻す」から確認画面を開いてください。');
+        session.value = session.scope === 'guild' ? structuredClone(defaults) : {};
+      }
+      session.resetConfirmation = false;
+      await interaction.update({ components: session.setupPage !== undefined ? setupView(id, session) : editorView(id, session), allowedMentions: emptyMentions }); return;
+    }
     if (action === 'save') {
+      if(session.choosingSetup)throw new UserError('保存済み設定のプレビューから「この設定で設置」を選んでください。');
+      if (session.setupPage !== undefined && session.setupPage !== 2) throw new UserError('最後の確認ページへ進んでから設置してください。');
       await interaction.deferUpdate();
       await this.saveEditor(interaction, id, session); return;
     }
     if (action === 'cancel') { this.editors.delete(id); await interaction.update({ components: [card('設定をキャンセルしました', '公開中の設定は変更されていません。')] }); return; }
-    if (action === 'reset') session.value = session.scope === 'guild' ? structuredClone(defaults) : {};
-    else if (action === 'restore') {
-      const previous = await this.store.previousSettings(session.guildId, session.scope === 'guild' ? null : session.channelId);
-      if (!previous) throw new UserError('復元できる過去の設定がありません。');
-      editorConfig({ ...session, value: previous }); session.value = previous;
+    if (session.setupPage !== undefined && ['setupnext', 'setupprev'].includes(action)) {
+      session.setupPage = Math.max(0, Math.min(2, session.setupPage + (action === 'setupnext' ? 1 : -1))) as 0 | 1 | 2;
+      await interaction.update({ components: setupView(id, session), allowedMentions: emptyMentions }); return;
     }
-    else if (action === 'content' && interaction.isStringSelectMenu()) editSection(session, 'content', {
-      text: interaction.values.includes('text'), images: interaction.values.includes('images'), urls: interaction.values.includes('urls'),
-      caption: interaction.values.includes('caption'), animation: interaction.values.includes('animation'),
-    });
+    if (action === 'advanced') session.setupPage = undefined;
+    if (action === 'features' && session.setupPage !== undefined && interaction.isStringSelectMenu()) {
+      const urls = interaction.values.includes('urls');
+      editSection(session, 'content', { text: interaction.values.includes('text'), images: interaction.values.includes('images'), urls });
+      editSection(session, 'panel', { title: interaction.values.includes('text') ? '匿名チャット' : '匿名画像', description: defaultPanelDescription(editorConfig(session).content) });
+      await interaction.update({ components: setupView(id, session), allowedMentions: emptyMentions }); return;
+    }
+    if (action === 'content' && interaction.isStringSelectMenu()) {
+      const automaticDescription = isDefaultPanelDescription(editorConfig(session).panel.description);
+      editSection(session, 'content', {
+        text: interaction.values.includes('text'), images: interaction.values.includes('images'), urls: interaction.values.includes('urls'),
+        caption: interaction.values.includes('caption'),
+      });
+      if (automaticDescription) editSection(session, 'panel', { description: defaultPanelDescription(editorConfig(session).content) });
+    }
     else if (action === 'safety' && interaction.isStringSelectMenu()) editSection(session, 'content', { allowNsfw: interaction.values.includes('nsfw'), allowNsfl: interaction.values.includes('nsfl') });
     else if (action === 'providers' && interaction.isStringSelectMenu()) editSection(session, 'content', { providers: interaction.values as Config['content']['providers'] });
     else if (action === 'roles' && interaction.isRoleSelectMenu()) editSection(session, 'moderation', { managerRoles: interaction.values });
@@ -409,11 +540,16 @@ export class App {
     else if (action === 'export') {
       await interaction.reply({ content: 'この下書きの設定です。Webhookなどの秘密情報は含まれません。', flags: MessageFlags.Ephemeral,
         files: [new AttachmentBuilder(Buffer.from(exportTemplate(session.value)), { name: 'anonymous.json' })] }); return;
-    } else if (!['back', 'management','buttons','safetyview','limits'].includes(action)) { await interaction.showModal(editorModal(id, action, editorConfig(session))); return; }
+    } else if (!['back', 'management','toolsview','panelpreview','other','buttons','safetyview','limits','providersview','advanced'].includes(action)) { await interaction.showModal(editorModal(id, action, editorConfig(session))); return; }
+    if (session.setupPage !== undefined) {
+      await interaction.update({ components: setupView(id, session), allowedMentions: emptyMentions }); return;
+    }
     const management = ['management', 'roles', 'allowedroles', 'reportchannel', 'logchannel', 'directposts'].includes(action);
-    await interaction.update({ components: action === 'limits' ? limitsView(id) : ['safety','safetyview'].includes(action)?safetyView(id,session):action==='buttons'?buttonSettingsView(id,session):management ? managementView(id, session) : editorView(id, session), allowedMentions: emptyMentions });
+    await interaction.update({ components: action === 'other' ? otherView(id,session) : ['safety','safetyview'].includes(action)?safetyView(id,session):action==='buttons'?buttonSettingsView(id,session):management ? managementView(id, session) : editorView(id, session), allowedMentions: emptyMentions });
   }
   async saveEditor(interaction: UIInteraction, id: string, session: EditorSession): Promise<void> {
+    if (session.resumeConfirmation) throw new UserError('先に匿名投稿の再開を確認してください。');
+    if (session.scope === 'channel' && !session.installing && !(await this.store.settings(session.guildId,session.channelId,true)).enabled) throw new UserError('匿名投稿は停止中です。案内の編集画面を開き直し、再開を確認してください。');
     const channel = await this.channel(session.guildId, session.channelId);
     const me = await channel.guild.members.fetchMe();
     const required = [PermissionFlagsBits.ViewChannel, channel.isThread() ? PermissionFlagsBits.SendMessagesInThreads : PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory,
@@ -434,7 +570,7 @@ export class App {
     }
     const affected = session.scope === 'guild' ? await this.store.configuredChannels(session.guildId) : [session.channelId];
     const actor = config.policy.retentionDays === 0 ? this.secrets.fingerprint('settings-actor', session.guildId, interaction.user.id) : interaction.user.id;
-    await this.store.saveSettings(session.original, session.scope, session.value, actor);
+    await this.store.saveSettings(session.original, session.scope, session.value, actor, channel.name);
     const failed: string[] = [];
     for (const channelId of affected) {
       try {
@@ -442,8 +578,12 @@ export class App {
         const settings = await this.store.settings(session.guildId, channelId, true);
         if (!settings.enabled && !session.installing) continue;
         const webhook = await this.posting.createWebhook(destination);
-        const panelId = (await destination.send({ ...panelPayload(settings.config),flags:MessageFlags.IsComponentsV2 | MessageFlags.SuppressNotifications })).id;
-        await this.store.setPanel(session.guildId, channelId, panelId, webhook);
+        const sent = await destination.send({ ...panelPayload(settings.config),flags:MessageFlags.IsComponentsV2 | MessageFlags.SuppressNotifications });
+        const panelId = sent.id;
+        if (await this.store.setPanel(session.guildId, channelId, panelId, webhook, settings) === false) {
+          await destination.messages.delete(panelId).catch(() => undefined);
+          throw new UserError('設定または受付状態が変更されたため、案内の更新を取り消しました。');
+        }
         if (settings.panelId) await destination.messages.delete(settings.panelId).catch(() => undefined);
       } catch { failed.push(channelId); }
     }
@@ -464,12 +604,13 @@ export class App {
       finally { session.busy = false; }
       return;
     }
-    if (prefix === 'submit' || prefix === 'reply' || prefix === 'replyimage') {
+    if (prefix === 'submit' || prefix === 'reply' || prefix === 'replyimage' || prefix === 'replyurl') {
       const settings = await this.store.settings(interaction.guildId!, interaction.channelId!, true);
-      const kind = prefix === 'reply' ? 'text' : prefix === 'replyimage' ? 'image' : id;
+      const kind = prefix === 'reply' ? 'text' : prefix === 'replyimage' ? 'image' : prefix === 'replyurl' ? 'url' : id;
       const content = interaction.fields.fields.has('text') ? field('text') : '';
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-      if (kind === 'url') { await this.prepareUrl(interaction, field('url'), content); return; }
+      if (kind === 'url') { await this.prepareUrl(interaction, field('url'), content, prefix === 'replyurl' ? id : undefined); return; }
+      if (kind === 'image' && !settings.config.content.images) throw new UserError('このチャンネルではファイルの直接添付を利用できません。');
       await this.posting.preflight({ guildId: interaction.guildId!, channelId: interaction.channelId!, userId: interaction.user.id, operationId: interaction.id, text: content }, settings.config);
       const files = kind === 'image' ? await this.media.attachments([...interaction.fields.getUploadedFiles('files', true).values()].map(file => file.url), settings.config) : [];
       await this.send(interaction, content, files, undefined, prefix === 'reply' || prefix === 'replyimage' ? id : undefined); return;
@@ -505,13 +646,13 @@ export class App {
       await this.requireManager(interaction, session.channelId);
       if (session.scope === 'guild' && !isBotAdmin(interaction.user.id) && !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) throw new UserError('サーバー標準の変更にはサーバー管理権限が必要です。');
       const copy = structuredClone(session);
+      if (session.resumeConfirmation) throw new UserError('先に匿名投稿の再開を確認してください。');
       switch (action) {
         case 'display': {
           const repost = selected('repost').trim().toLowerCase();
-          const urlButton=selected('urlButton').trim().toLowerCase();const metadata=selected('metadata').trim().toLowerCase();
           const urlAutoLabel=selected('urlAutoLabel').trim().toLowerCase();
-          if ([repost,urlButton,metadata,urlAutoLabel].some(value=>!['on','off'].includes(value))) throw new UserError('切り替え項目を選択してください。');
-          editSection(copy, 'panel', { style:'v2', repost: repost === 'on',urlButton:urlButton==='on',metadata:metadata==='on',urlAutoLabel:urlAutoLabel==='on' }); break;
+          if ([repost,urlAutoLabel].some(value=>!['on','off'].includes(value))) throw new UserError('切り替え項目を選択してください。');
+          editSection(copy, 'panel', { style:'v2', repost: repost === 'on',metadata:false,urlAutoLabel:urlAutoLabel==='on' }); break;
         }
         case 'caption': {
           const value=selected('caption');if(!['on','off'].includes(value))throw new UserError('説明文の許可を選択してください。');
@@ -534,6 +675,12 @@ export class App {
         case 'images': editSection(copy, 'panel', { image: field('image'), thumbnail: field('thumbnail') }); break;
         case 'labels': editSection(copy, 'panel', { textLabel: field('textLabel'), imageLabel: field('imageLabel'), urlLabel: field('urlLabel'), helpLabel: field('helpLabel'), ...(field('urlLabel')!==editorConfig(copy).panel.urlLabel?{urlAutoLabel:false}:{}) }); break;
         case 'rules': editSection(copy, 'policy', { rules: field('rules'), rulesUrl: field('rulesUrl') }); break;
+        case 'urlcleanup': case 'references': {
+          const name = action === 'urlcleanup' ? 'cleanUrls' : 'linkReferences';
+          const value = selected(name);
+          if (!['on','off'].includes(value)) throw new UserError('有効・無効を選択してください。');
+          editSection(copy,'policy',{[name]:value === 'on'});break;
+        }
         case 'limitsbasic': editSection(copy, 'policy', { cooldown: Number(field('cooldown')) }); editSection(copy, 'moderation', { reportThreshold: Number(field('threshold')) }); break;
         case 'spam': editSection(copy, 'policy', { postsPerMinute: Number(field('posts')), charsPerMinute: Number(field('chars60')),
           charsPerFiveMinutes: Number(field('chars300')), spamTimeoutMinutes: Number(field('timeout')), duplicateSeconds: Number(field('duplicate')) }); break;
@@ -557,7 +704,7 @@ export class App {
         default: return;
       }
       session.value = copy.value;
-      if (interaction.isFromMessage()) await interaction.update({ components: editorView(id, session), allowedMentions: emptyMentions });
+      if (interaction.isFromMessage()) await interaction.update({ components: session.returnToOther ? otherView(id,session) : editorView(id, session), allowedMentions: emptyMentions });
     }
   }
   async context(interaction: import('discord.js').MessageContextMenuCommandInteraction): Promise<void> {
@@ -567,15 +714,18 @@ export class App {
       const settings = await this.store.settings(interaction.guildId!, interaction.channelId!, true);
       if (settings.panelId !== id) throw new UserError('このBotが設置した匿名投稿の案内を選択してください。');
       const session: EditorSession = { owner: interaction.user.id, guildId: interaction.guildId!, channelId: interaction.channelId!,
-        scope: 'channel', original: settings, value: structuredClone(settings.overrides), installing: false };
+        scope: 'channel', original: settings, value: structuredClone(settings.overrides), installing: false, resumeConfirmation: !settings.enabled };
       const key = this.editors.create(session);
-      await this.respond(interaction, editorView(key, session)); return;
+      await this.respond(interaction, session.resumeConfirmation ? resumeConfirmationView(key) : editorView(key, session)); return;
     }
     const post = await this.store.post(interaction.guildId!, interaction.channelId!, id);
     if (!post) throw new UserError('このBotの保存期間内の匿名投稿を選択してください。');
     const settings = await this.store.settings(interaction.guildId!, interaction.channelId!);
     if (interaction.commandName === 'メッセージに返信') {
-      await interaction.showModal(postModal(settings.config.content.text ? 'text' : 'image', settings.config, `${settings.config.content.text ? 'reply' : 'replyimage'}:${id}`)); return;
+      const kind = settings.config.content.text ? 'text' : settings.config.content.images ? 'image' : settings.config.content.urls ? 'url' : null;
+      if (!kind) throw new UserError('このチャンネルでは返信に使える投稿方法がありません。');
+      const prefix = kind === 'text' ? 'reply' : kind === 'image' ? 'replyimage' : 'replyurl';
+      await interaction.showModal(postModal(kind, settings.config, `${prefix}:${id}`)); return;
     }
     if (interaction.commandName === '匿名つぶやき通報') {
       if (!settings.config.moderation.reportChannel) throw new UserError('このサーバーの通報先がまだ設定されていません。管理者に連絡してください。');

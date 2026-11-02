@@ -1,4 +1,4 @@
-import sharp from 'sharp';
+import sharp from './sharp.js';
 import * as ort from 'onnxruntime-node';
 import { mkdir, access, readFile, writeFile, rename } from 'node:fs/promises';
 import { resolve } from 'node:path';

@@ -1,5 +1,7 @@
 FROM oven/bun:1.3-slim AS runtime
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg python3-venv && rm -rf /var/lib/apt/lists/*
+RUN python3 -m venv /opt/gallery-dl && /opt/gallery-dl/bin/python -m pip install --no-cache-dir gallery-dl==1.32.19 && /opt/gallery-dl/bin/python -m pip uninstall -y pip setuptools
+ENV GALLERY_DL_PYTHON=/opt/gallery-dl/bin/python
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --chown=bun:bun package.json bun.lock ./

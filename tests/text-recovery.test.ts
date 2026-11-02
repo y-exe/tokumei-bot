@@ -126,6 +126,26 @@ test('URL投稿の説明文を修正しても取得元URLは変えず、禁止�
   await assert.rejects(f.bot.prepareUrl(request(),'https://example.com/改造','本文'),error=>error instanceof BlockedWordError&&error.scope==='source');
 });
 
+test('URL取得専用の返信はURLフォームを開き、伏字でやり直しても確認・送信まで返信先を保持する',async()=>{
+  const f=fixture();f.config.content.text=false;f.config.content.images=false;f.config.content.urls=true;
+  const target='600000000000000001',source='https://example.com/image.png';
+  f.bot.store.post=async()=>({message_id:target} as never);
+  let modal:any,preview:any;
+  await f.bot.context(request({commandName:'メッセージに返信',targetId:target,showModal:async(value:any)=>{modal=value.toJSON();}}) as never);
+  assert.equal(modal.custom_id,`replyurl:${target}`);
+  assert.ok(nodes(modal).some(node=>node.custom_id==='url'));
+  assert.ok(!nodes(modal).some(node=>node.custom_id==='files'));
+  f.bot.media.fromUrl=async()=>({files:[{name:'image.png',kind:'image',data:Buffer.from('fixture')}],source,warnings:[],videoLinks:[]});
+  await f.bot.modal(request({customId:modal.custom_id,fields:{fields:new Map([['text',{}]]),getTextInputValue:(name:string)=>name==='url'?source:'改造の説明'}}) as ModalSubmitInteraction);
+  await f.bot.component(f.click(f.recoveryId(),'mask',{editReply:async(value:unknown)=>{preview=value;}}));
+  const serialized=JSON.stringify(preview);assert.ok(serialized.includes(`https://discord.com/channels/guild/channel/${target}`));
+  const previewId=serialized.match(/preview:([a-f0-9]+):send/)![1]!;
+  assert.equal(f.bot.previews.get(previewId,'alice','guild').replyTo,target);
+  await f.bot.component(request({customId:`preview:${previewId}:send`}) as ButtonInteraction);
+  assert.equal(f.posts.length,1);assert.equal(f.posts[0]!.replyTo,target);assert.equal(f.posts[0]!.source,source);
+  assert.equal(f.posts[0]!.text,'＊＊の説明');
+});
+
 test('本人・元サーバー・元チャンネル・10分の有効期限を確認する',async()=>{
   const f=fixture();await f.bot.send(request(),'改造',[]);const id=f.recoveryId();
   await assert.rejects(f.bot.component(f.click(id,'mask',{user:{id:'bob'}})),/本人/);

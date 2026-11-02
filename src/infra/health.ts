@@ -2,7 +2,7 @@ import { createServer, type Server } from 'node:http';
 import type { Client } from 'discord.js';
 import type { Store } from './store.js';
 
-export function healthServer(client: Pick<Client, 'isReady'>, store: Pick<Store, 'pool'>, port: number): Server {
+export function healthServer(client: Pick<Client, 'isReady'>, store: Pick<Store, 'pool'>, port: number, host = '0.0.0.0'): Server {
   const server = createServer((request, response) => {
     if (request.url === '/live') {
       response.writeHead(200, { 'Content-Type': 'text/plain' }).end('ok'); return;
@@ -15,7 +15,7 @@ export function healthServer(client: Pick<Client, 'isReady'>, store: Pick<Store,
       } catch { response.writeHead(503).end('database unavailable'); }
     })();
   });
-  server.listen(port, '0.0.0.0'); return server;
+  server.listen(port, host); return server;
 }
 
 export async function heartbeat(url: string | undefined, healthy: boolean): Promise<void> {
