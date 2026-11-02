@@ -1,6 +1,6 @@
 # 開発・テスト
 
-[目次](../README.md) · [旧Botからの移行](migration.md)
+[目次](../README.md)
 
 ## コマンド
 
@@ -59,7 +59,6 @@ bun run dev
 | `src/services/` | 投稿・案内再送・通報処罰・通常投稿の制御 |
 | `src/media/` | URL取得、加工、モデル推論、安全判定 |
 | `src/infra/` | DB、暗号化、直列化、診断、監視、lookup |
-| `src/migration/`・`src/migrate.ts` | 旧データの移行 |
 | `tests/` | 機能・回帰テスト |
 | `docs/` | 利用・管理・開発の説明 |
 | `.local/`・`models/` | ローカル検証用データ・取得モデル。Git管理外 |

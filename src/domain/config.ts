@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { UserError } from './errors.js';
-import { upgradeCommonSettings } from '../migration/common.js';
 
 export const snowflake = z.string().regex(/^\d{17,20}$/, 'DiscordのIDを指定してください。');
 const publicUrl = z.string().max(1000).refine(value => {
@@ -90,8 +89,6 @@ export function urlMethodLabel(config: Config): string {
   const suffix = names.at(-1)==='画像URL' ? '' : 'のURL';
   return base.length + suffix.length <= 45 ? `${base}${suffix}` : base;
 }
-export const presetNames = { chat: '匿名チャット', image: '匿名画像', upload: '画像アップロード専用' } as const;
-export type Preset = keyof typeof presetNames;
 
 export function defaultPanelDescription(content: Pick<Config['content'], 'text' | 'images' | 'urls'>): string {
   const media = content.images || content.urls;
@@ -124,18 +121,9 @@ export function resolveConfig(base: Config, overrides: Overrides): Config {
   return configSchema.parse(result);
 }
 
-export function presetOverrides(preset: Preset): Overrides {
-  const content = { ...defaults.content };
-  if (preset === 'image' || preset === 'upload') content.text = false;
-  if (preset === 'upload') { content.urls = false; content.caption = false; }
-  return { panel: { ...defaults.panel, title: presetNames[preset], description: defaultPanelDescription(content) }, content, identity: { ...defaults.identity }, moderation: { allowDirectPosts: false } };
-}
-
 export function importTemplate(input: unknown, base: Config): Overrides {
-  const template = z.object({ version: z.literal(1), settings: z.unknown() }).strict().parse(input);
-  const identity=template.settings && typeof template.settings==='object' && 'identity' in template.settings ? template.settings.identity : undefined;
-  const converted=identity && typeof identity==='object' && 'kind' in identity ? upgradeCommonSettings(template.settings,base) : template.settings;
-  const settings=overridesSchema.parse(converted);
+  const template = z.object({ version: z.literal(1), settings: overridesSchema }).strict().parse(input);
+  const settings=template.settings;
   resolveConfig(base, settings);
   return settings;
 }

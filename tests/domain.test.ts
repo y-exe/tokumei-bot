@@ -3,7 +3,7 @@ import { initializeBotAdmins } from '../src/domain/permissions.js';
 before(() => initializeBotAdmins('https://admin.example/id',async()=> '483307286513582090'));
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { defaults, exportTemplate, importTemplate, presetOverrides, resolveConfig } from '../src/domain/config.js';
+import { defaults, exportTemplate, importTemplate, resolveConfig } from '../src/domain/config.js';
 import { validatePost, validateText, type PostInput } from '../src/domain/validation.js';
 import { SecretBox } from '../src/infra/secrets.js';
 import { Sessions } from '../src/ui/sessions.js';
@@ -23,13 +23,13 @@ test('URL取得と直接添付を独立して許可し、URL画像・動画だ�
   assert.doesNotThrow(()=>validatePost({...input,text:'',media:[image]},imageOnly));
   assert.throws(()=>validatePost({...input,text:'',media:[image],source},imageOnly),/URL変換/);
 });
-test('プリセットごとにテキスト・画像・URLの制約を全入口用の検査で守る', () => {
-  const chat = resolveConfig(defaults, presetOverrides('chat'));
+test('テキスト・画像・URLの共通設定を全入口用の検査で守る', () => {
+  const chat = resolveConfig(defaults, {});
   assert.doesNotThrow(() => validatePost(input, chat));
-  const images = resolveConfig(defaults, presetOverrides('image'));
+  const images = resolveConfig(defaults, { content: { text: false, images: true, urls: true } });
   assert.throws(() => validatePost(input, images), /画像の添付が必要/);
   assert.doesNotThrow(() => validatePost({ ...input, media: [image], source: 'https://x.com/example/status/123' }, images));
-  const upload = resolveConfig(defaults, presetOverrides('upload'));
+  const upload = resolveConfig(defaults, { content: { text: false, images: true, urls: false, caption: false } });
   assert.throws(() => validatePost({ ...input, media: [image] }, upload), /説明文/);
   assert.throws(() => validatePost({ ...input, text: '', media: [image], source: 'https://example.com/image.jpg' }, upload), /URL変換/);
   assert.doesNotThrow(() => validatePost({ ...input, text: '', media: [image] }, upload));
@@ -57,7 +57,7 @@ test('Discord上限を超える添付は拒否し、アニメーションや動�
 test('URL動画だけでもメディア投稿として扱い、説明文・テキスト専用・件数の制限を守る', () => {
   const video = { ...input, text: '', videoLinks: ['https://x-p.yexe.xyz/example.mp4'], source: 'https://x.com/example/status/123' };
   assert.doesNotThrow(() => validatePost(video, defaults));
-  const imageOnly = resolveConfig(defaults, presetOverrides('image'));
+  const imageOnly = resolveConfig(defaults, { content: { text: false, images: true, urls: true } });
   assert.doesNotThrow(() => validatePost(video, imageOnly));
   const noCaption = resolveConfig(defaults, { content: { caption: false } });
   assert.throws(() => validatePost({ ...video, text: '説明' }, noCaption), /説明文/);

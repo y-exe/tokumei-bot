@@ -13,7 +13,6 @@
     "check": "tsc -p tsconfig.json --noEmit",
     "start": "bun src/index.ts",
     "commands": "bun src/register.ts",
-    "migrate": "bun src/migrate.ts",
     "test": "tsx --test tests/*.test.ts"
   },
   "dependencies": {

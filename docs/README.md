@@ -6,7 +6,7 @@
 
 | ページ | 内容 |
 | --- | --- |
-| [使い方](guide/usage.md) | 投稿・返信・編集・削除、全コマンド、投稿モード |
+| [使い方](guide/usage.md) | 投稿・返信・編集・削除、全コマンド、投稿方法 |
 | [設定](guide/settings.md) | 継承、案内の表示、投稿制限、保存期間 |
 | [モデレーション](guide/moderation.md) | 通報、処罰、通常投稿の制御 |
 | [画像・動画の取得](guide/media.md) | 対応サイト、PixivのCookie、加工・取得制限 |
@@ -26,7 +26,6 @@
 | --- | --- |
 | [開発・テスト](development/testing.md) | PGliteでローカル起動、テスト、実画像の検証、CI |
 | [モデル仕様](development/models.md) | ONNXの入出力、前処理、手動配置 |
-| [旧Botからの移行](development/migration.md) | JSON・旧DBの読み込み、確認実行、移行先指定 |
 
 ## 関連文書
 

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { MessageFlags, ComponentType } from 'discord.js';
-import { defaults, presetOverrides, resolveConfig, urlMethodLabel, parseRetention, retentionLabel, importTemplate, exportTemplate } from '../src/domain/config.js';
+import { defaults, defaultPanelDescription, resolveConfig, urlMethodLabel, parseRetention, retentionLabel, importTemplate, exportTemplate } from '../src/domain/config.js';
 import { panel, panelPayload, payload, help, legalLinks } from '../src/ui/components.js';
 import { postModal } from '../src/ui/modals.js';
 import { editorView, editorModal, managementView, otherView, setupView, reuseSetupView, backupsView, buttonSettingsView, resetConfirmationView, type EditorSession } from '../src/ui/editor.js';
@@ -29,9 +29,8 @@ test('初期の案内ボタンは指定の文言・色・絵文字で、SNS名�
   const urlOnly=resolveConfig(defaults,{content:{text:false,images:false,urls:true},panel:{urlButton:false}});
   assert.deepEqual(customIds(panel(urlOnly).toJSON()),['post:url','post:help']);
   assert.deepEqual(customIds(panel(resolveConfig(urlOnly,{content:{text:true,urls:false}})).toJSON()),['post:text','post:help']);
-  for (const [preset, subject] of [['chat', 'メッセージや画像'], ['image', '画像'], ['upload', '画像']] as const) {
-    const config = resolveConfig(defaults, presetOverrides(preset));
-    assert.equal(config.panel.description, `名前を公開せず匿名で${subject}を送信できます。\nルールや詳しい使い方は「ヘルプ・詳細」から確認してください。`);
+  for (const [content, subject] of [[{text:true,images:true,urls:true}, 'メッセージや画像'], [{text:false,images:true,urls:false}, '画像'], [{text:false,images:false,urls:true}, '画像']] as const) {
+    assert.equal(defaultPanelDescription(content), `名前を公開せず匿名で${subject}を送信できます。\nルールや詳しい使い方は「ヘルプ・詳細」から確認してください。`);
   }
 });
 
@@ -130,8 +129,8 @@ test('保存期間の無期限・0はフォームとテンプレートで維持�
   assert.deepEqual(importTemplate(JSON.parse(exportTemplate(value)),defaults),value);
 });
 test('Components v2の案内は許可された投稿ボタンだけ表示する', () => {
-  assert.deepEqual(customIds(panel(resolveConfig(defaults, presetOverrides('upload'))).toJSON()), ['post:image', 'post:help']);
-  assert.deepEqual(customIds(panel(resolveConfig(defaults, presetOverrides('image'))).toJSON()), ['post:image', 'post:url', 'post:help']);
+  assert.deepEqual(customIds(panel(resolveConfig(defaults, { content: { text: false, images: true, urls: false, caption: false } })).toJSON()), ['post:image', 'post:help']);
+  assert.deepEqual(customIds(panel(resolveConfig(defaults, { content: { text: false, images: true, urls: true } })).toJSON()), ['post:image', 'post:url', 'post:help']);
   const result = payload([panel(defaults)], false);
   assert.equal(result.flags, MessageFlags.IsComponentsV2);
   assert.ok(!('content' in result)); assert.ok(!('embeds' in result));
@@ -165,9 +164,9 @@ test('案内の色なしは継承で上書きされず、プレビューと設�
   assert.equal(panel(resolveConfig(config, { panel: { color: 0 } })).toJSON().accent_color, 0);
 });
 
-test('すべての投稿モードで共通の規約リンクをボタン直下に置き、補足offでも消さない',()=>{
-  for(const preset of ['chat','image','upload'] as const){
-    const config=resolveConfig(defaults,{...presetOverrides(preset),panel:{metadata:false,footer:'任意の補足'}});
+test('投稿方法の組み合わせによらず規約リンクをボタン直下に置き、補足offでも消さない',()=>{
+  for(const content of [{text:true,images:true,urls:true},{text:false,images:true,urls:false},{text:false,images:false,urls:true}]){
+    const config=resolveConfig(defaults,{content,panel:{metadata:false,footer:'任意の補足'}});
     const children=panel(config).toJSON().components;
     const buttons=children.findIndex(component=>component.type===ComponentType.ActionRow);
     const below=children[buttons+1];
@@ -205,7 +204,7 @@ test('画像ボタンからLabel内のFileUploadで直接複数ファイルを�
   const label = flatten(modal).find(item => (item.component as Record<string, unknown> | undefined)?.type === ComponentType.FileUpload)!;
   assert.equal(label.type, ComponentType.Label);
   assert.ok(!JSON.stringify(modal).includes('1枚10MB以内'));
-  const upload = postModal('image', resolveConfig(defaults, presetOverrides('upload'))).toJSON();
+  const upload = postModal('image', resolveConfig(defaults, { content: { text: false, images: true, urls: false, caption: false } })).toJSON();
   assert.ok(!customIds(upload).includes('text'));
 });
 test('画像とサムネイルを設定した編集画面も40コンポーネント以内で直列化できる', () => {

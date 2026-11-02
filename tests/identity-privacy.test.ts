@@ -6,7 +6,6 @@ import { PGLiteSocketServer } from '@electric-sql/pglite-socket';
 import { Store } from '../src/infra/store.js';
 import { SecretBox } from '../src/infra/secrets.js';
 import { defaults } from '../src/domain/config.js';
-import { applyLegacy, planLegacy } from '../src/migration/legacy.js';
 
 let db: PGlite; let server: PGLiteSocketServer; let store: Store; let url: string;
 const box = new SecretBox(randomBytes(32).toString('base64'));
@@ -28,7 +27,7 @@ before(async () => {
   await old.pool.query("INSERT INTO v2_legacy_lookup_denials VALUES('600000000000009999')");
   await old.close(); store = new Store(url, box); await store.initialize();
 });
-after(async () => { await store.close(); await server.stop(); await db.close(); });
+after(async () => { await store.close(); await server.stop(); await new Promise<void>(resolve=>setImmediate(resolve)); await db.close(); });
 
 test('既存の投稿・通報・利用停止を失わずIDを保護し、他プロジェクトのテーブルは変更しない', async () => {
   const raw = (await store.pool.query(`SELECT a.user_id,a.user_ciphertext,s.user_id AS session_user,c.last_user,
@@ -74,16 +73,4 @@ test('同じ鍵で再起動しても照会でき、鍵の相違は情報を書�
   const wrong = new Store(url, new SecretBox(randomBytes(32).toString('base64')));
   try { await assert.rejects(wrong.initialize(), /暗号鍵が一致しません/); } finally { await wrong.close(); }
   assert.deepEqual(await store.lookupAuthor('600000000000000123'), { user_id: user, guild_id: guild, channel_id: channel });
-});
-
-test('旧形式からの追加移行も保護形式で保存し、保存0の照会禁止を維持する', async () => {
-  const g = '100000000000000999', c = '200000000000000999', u = '300000000000000999', m = '600000000000000999';
-  const plan = planLegacy({ channels: { [c]: { webhook_url: `https://discord.com/api/webhooks/700000000000000999/${'a'.repeat(68)}` } },
-    messages: { [m]: { channel_id: c, user_id: u, timestamp: new Date().toISOString(), content: '旧本文', anonymous_id: 1 } } }, { channels: { [c]: g } });
-  await applyLegacy(store, box, plan);
-  const author = (await store.pool.query('SELECT user_id,user_ciphertext FROM v2_authors WHERE operation_id=$1', [`legacy:${m}`])).rows[0];
-  assert.match(author.user_id, /^h1:/); assert.ok(!JSON.stringify(author).includes(u));
-  assert.equal((await store.lookupAuthor(m))!.user_id, u);
-  await store.saveSettings(await store.settings(g, c, true), 'channel', { policy: { retentionDays: 0 } }, actor);
-  assert.equal(await store.lookupAuthor(m), null);
 });

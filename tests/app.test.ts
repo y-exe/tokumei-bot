@@ -44,7 +44,7 @@ test('/setupと案内の埋め込み編集は選択数上限が選択肢数以�
   assert.equal(views.length, 2); views.forEach(inspect);
 });
 
-test('/setupはモード引数なしで機能・ルール・確認を進め、設置までは公開しない', async () => {
+test('/setupは機能・ルール・確認を進め、設置までは公開しない', async () => {
   const bot = app(); let shown = ''; let saved = 0;
   bot.respond = async (_interaction, components) => { shown = JSON.stringify(components.map(component => component.toJSON())); };
   bot.store.saveSettings = async () => { throw new Error('確認前に保存してはいけない'); };

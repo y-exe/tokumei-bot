@@ -43,7 +43,7 @@ bun run start
 初回起動時にDBのテーブル作成とモデルの取得を行います。
 案内用の絵文字もBotのアプリケーションへ自動追加します。次回以降は再利用し、不足分だけ補充します。サーバーの絵文字枠や手動登録は不要です。追加に失敗した場合は標準絵文字で表示を続けます。
 
-起動後、Discordで `/setup` → モード選択 →「保存して設置」を実行します。
+起動後、Discordで `/setup` → 機能・ルールの設定 →「この内容で設置」を実行します。
 
 ## 環境変数
 
@@ -66,7 +66,6 @@ bun run start
 | `NUDITY_MODEL_DIR` | 既定`models/nudenet` |
 | `ANIME_NUDITY_MODEL_DIR` | 既定`models/anime-censor` |
 | `LOOKUP_TAILSCALE_ORIGIN`・`LOOKUP_ALLOWED_TAILSCALE_LOGINS`・`LOOKUP_PORT` | [lookupの設定](lookup.md) |
-| `MIGRATION_SOURCE_DATABASE_URL`・`MIGRATION_TARGET_DATABASE_URL` | [旧データの移行](../development/migration.md) |
 
 暗号化鍵は次で生成できます。稼働後はDBと一緒に保管してください。
 

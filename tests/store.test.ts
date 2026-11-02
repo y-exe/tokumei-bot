@@ -3,10 +3,7 @@ import assert from 'node:assert/strict';
 import { PGlite } from '@electric-sql/pglite';
 import { PGLiteSocketServer } from '@electric-sql/pglite-socket';
 import { Store } from '../src/infra/store.js';
-import { defaults, presetOverrides } from '../src/domain/config.js';
-import { applyLegacy, planLegacy } from '../src/migration/legacy.js';
-import { SecretBox } from '../src/infra/secrets.js';
-import { randomBytes } from 'node:crypto';
+import { defaults } from '../src/domain/config.js';
 
 let db: PGlite; let server: PGLiteSocketServer; let store: Store;
 const guild = '100000000000000001'; const channel = '200000000000000001'; const actor = '300000000000000001';
@@ -197,7 +194,7 @@ test('無期限の投稿と通報は期限削除されず、保存0へ変える�
 
 test('DB設定はサーバーで分離し、同時編集を拒否し、設定キャッシュを更新する', async () => {
   const original = await store.settings(guild, channel);
-  await store.saveSettings(original, 'channel', presetOverrides('image'), actor);
+  await store.saveSettings(original, 'channel', {content:{text:false}}, actor);
   const changed = await store.settings(guild, channel);
   assert.equal(changed.config.content.text, false); assert.equal(changed.channelVersion, 1);
   await assert.rejects(store.saveSettings(original, 'channel', {}, actor), /更新されました/);
@@ -253,26 +250,6 @@ test('削除後も通報証拠は保持し、期限を過ぎた対応・本文�
   assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM v2_authors')).rows[0].n, 0);
   assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM v2_reports')).rows[0].n, 0);
 });
-test('移行適用は受付を有効にせず、旧Webhookを暗号化し、再実行してもデータを重複させない', async () => {
-  const guildId = '100000000000000030'; const channelId = '200000000000000030'; const userId = '300000000000000030'; const messageId = '400000000000000030';
-  const webhook = 'https://discord.com/api/webhooks/500000000000000030/testtoken'; const now = new Date();
-  const plan = planLegacy({ channels: { [channelId]: { webhook_url: webhook } }, messages: { [messageId]: { channel_id: channelId, user_id: userId, timestamp: now, content: '旧投稿', anonymous_id: 45 } }, anonymous: { [channelId]: { counter: 45, last_user_id: userId } } }, { channels: { [channelId]: guildId } }, now);
-  const box = new SecretBox(randomBytes(32).toString('base64'));
-  await applyLegacy(store, box, plan); await applyLegacy(store, box, plan);
-  const settings = await store.settings(guildId, channelId); assert.equal(settings.enabled, false); assert.equal(settings.panelId, null);
-  assert.equal(box.open(settings.webhook!), webhook);
-  const post = await store.post(guildId, channelId, messageId); assert.equal(post?.user_id, userId); assert.equal(post?.layout, 'legacy');
-  assert.equal(box.open(post!.legacy_webhook!), webhook);
-  assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM v2_posts WHERE message_id=$1', [messageId])).rows[0].n, 1);
-  assert.equal((await store.pool.query('SELECT counter FROM v2_counters WHERE channel_id=$1', [channelId])).rows[0].counter, 45);
-});
-test('移行でサーバー対応が衝突した場合はトランザクション全体を戻す', async () => {
-  const existing = '200000000000000030'; const before = (await store.pool.query('SELECT count(*)::int AS n FROM v2_guilds')).rows[0].n;
-  const plan = planLegacy({ channels: { [existing]: { webhook_url: 'https://discord.com/api/webhooks/500000000000000030/testtoken' } } }, { channels: { [existing]: '100000000000000099' } });
-  await assert.rejects(applyLegacy(store, new SecretBox(randomBytes(32).toString('base64')), plan), /衝突/);
-  assert.equal((await store.pool.query('SELECT count(*)::int AS n FROM v2_guilds')).rows[0].n, before);
-});
-
 test('通報通知は失敗・再起動後に回復し、古い処理が新しい通知結果を上書きしない', async () => {
   const config = structuredClone(defaults); config.policy.cooldown = 0;
   const g = 'notice-guild'; const c = 'notice-channel'; const m = 'notice-message';

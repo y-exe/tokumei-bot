@@ -1,7 +1,6 @@
 import { Pool, type PoolClient } from 'pg';
 import { randomUUID } from 'node:crypto';
 import { configSchema, defaults, overridesSchema, resolveConfig, type Config, type Overrides } from '../domain/config.js';
-import { migrateCommonSettings } from './common-settings-migration.js';
 import { UserError, FloodControlError } from '../domain/errors.js';
 import { nextAvatar } from '../domain/avatar.js';
 import { floodDecision, type FloodEvent, type FloodState } from '../domain/flood-control.js';
@@ -98,7 +97,6 @@ CREATE TABLE IF NOT EXISTS v2_restrictions (
 CREATE TABLE IF NOT EXISTS v2_channel_restrictions (
   guild_id text NOT NULL,channel_id text NOT NULL,user_id text NOT NULL,reason text NOT NULL,created_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(guild_id,channel_id,user_id)
 );
-CREATE TABLE IF NOT EXISTS v2_migrations(name text PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS v2_actions (
   id bigserial PRIMARY KEY, guild_id text NOT NULL, actor_id text NOT NULL,
   action text NOT NULL, message_id text, created_at timestamptz NOT NULL DEFAULT now()
@@ -133,7 +131,6 @@ export class Store {
   async initialize(): Promise<void> {
     await this.pool.query(schema); await this.pool.query(reportRetrySchema);
     await this.transaction(async client => {
-      await migrateCommonSettings(client);
       if (this.identities) await this.identities.migrate(client);
       else if ((await client.query('SELECT 1 FROM v2_identity_keys LIMIT 1')).rowCount) throw new Error('保護済みDBには既存の暗号鍵を指定してください。');
     });

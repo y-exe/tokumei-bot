@@ -6,7 +6,7 @@ import {
 import { ZodError } from 'zod';
 import { isBotAdmin } from './domain/permissions.js';
 import { isPostingChannel, type PostingChannel } from './domain/channels.js';
-import { defaults, defaultPanelDescription, isDefaultPanelDescription, exportTemplate, importTemplate, presetOverrides, resolveConfig, parseRetention, allowsDirectPosts, type Config } from './domain/config.js';
+import { defaults, defaultPanelDescription, isDefaultPanelDescription, exportTemplate, importTemplate, resolveConfig, parseRetention, allowsDirectPosts, type Config, type Overrides } from './domain/config.js';
 import { UserError, MediaSafetyError, BlockedWordError, FloodControlError, errorMessage } from './domain/errors.js';
 import { maskBlockedWords } from './domain/blocked-words.js';
 import { mediaBytes, validateText, type PostInput } from './domain/validation.js';
@@ -27,11 +27,10 @@ import { bugReportUrl, reportOperation } from './ui/bug-report.js';
 import { blockedTextView, type TextAction, type TextRecoverySession } from './ui/text-recovery.js';
 
 const emptyMentions = { parse: [] as ('users' | 'roles' | 'everyone')[] };
-const freshSetup = () => {
-  const value = presetOverrides('chat');
-  value.content = {...value.content,urls:false,allowNsfw:false,allowNsfl:false}; value.policy = {rules:defaults.policy.rules};
-  return value;
-};
+const freshSetup = ():Overrides => ({
+  panel:structuredClone(defaults.panel),content:{...defaults.content,urls:false,allowNsfw:false,allowNsfl:false},
+  identity:{...defaults.identity},policy:{rules:defaults.policy.rules},moderation:{allowDirectPosts:false},
+});
 type UIInteraction = RepliableInteraction;
 
 export class App {
@@ -539,7 +538,7 @@ export class App {
     if (action === 'features' && session.setupPage !== undefined && interaction.isStringSelectMenu()) {
       const urls = interaction.values.includes('urls');
       editSection(session, 'content', { text: interaction.values.includes('text'), images: interaction.values.includes('images'), urls });
-      editSection(session, 'panel', { title: interaction.values.includes('text') ? '匿名チャット' : '匿名画像', description: defaultPanelDescription(editorConfig(session).content) });
+      editSection(session, 'panel', { description: defaultPanelDescription(editorConfig(session).content) });
       await interaction.update({ components: setupView(id, session), allowedMentions: emptyMentions }); return;
     }
     if (action === 'content' && interaction.isStringSelectMenu()) {
