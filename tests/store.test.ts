@@ -280,7 +280,7 @@ test('通報通知は失敗・再起動後に回復し、古い処理が新し�
   assert.equal((await store.pool.query('SELECT notification_id FROM v2_reports WHERE guild_id=$1', [g])).rows[0].notification_id, 'discord-notice');
 });
 
-test('通知対象の20件制限はしきい値未満・通知先未設定の通報を除いて適用する', async () => {
+test('通知対象は1回で1サーバーにつき5件までで、しきい値未満・通知先未設定の通報を除く', async () => {
   const g = 'queue-guild'; const c = 'queue-channel';
   await store.saveSettings(await store.settings(g, c), 'guild', { ...structuredClone(defaults), moderation: { ...defaults.moderation, reportChannel: '900000000000000002', reportThreshold: 2 } }, actor);
   await store.pool.query(`INSERT INTO v2_reports(guild_id,channel_id,message_id,reporter_id,reason,evidence,expires_at,created_at)
@@ -293,5 +293,52 @@ test('通知対象の20件制限はしきい値未満・通知先未設定の通
   await store.saveSettings(await store.settings(g, c), 'channel', { moderation: { reportChannel: null } }, actor);
   assert.equal((await store.pendingReportNotices(g)).length, 0);
   await store.saveSettings(await store.settings(g, c), 'channel', { moderation: { reportThreshold: 1 } }, actor);
-  assert.equal((await store.pendingReportNotices(g)).length, 20);
+  assert.equal((await store.pendingReportNotices(g)).length, 5);
 });
+
+test('通報通知は1回で1サーバーにつき5件までで公平にさばく', async () => {
+  const a = 'fair-guild-a'; const b = 'fair-guild-b'; const left = 'fair-guild-left';
+  await store.pool.query(`INSERT INTO v2_guilds(guild_id,config) VALUES($1,$2),($3,$4),($5,$6)`,
+    [a, { moderation: { reportChannel: '900000000000000101', reportThreshold: 1 } },
+      b, { moderation: { reportChannel: '900000000000000102', reportThreshold: 1 } },
+      left, { moderation: { reportChannel: '900000000000000103', reportThreshold: 1 } }]);
+  for (const [guild, index] of [[a, 6], [b, 2]] as const) {
+    await store.pool.query(`INSERT INTO v2_reports(guild_id,channel_id,message_id,reporter_id,reason,evidence,expires_at,created_at)
+      SELECT $1,$1,'fair-'||g,'reporter','理由','{"content":"x"}','infinity',now()-g*interval '1 hour'
+      FROM generate_series(${index},1,-1) AS g`, [guild]);
+  }
+  await store.pool.query("UPDATE v2_guilds SET left_at=now() WHERE guild_id=$1", [left]);
+  await store.pool.query(`INSERT INTO v2_reports(guild_id,channel_id,message_id,reporter_id,reason,evidence,expires_at,created_at)
+    SELECT $1,$1,'fair-old','reporter','理由','{"content":"x"}','infinity',now()-interval '9 hour'`, [left]);
+  const notices = await store.pendingReportNotices();
+  assert.equal(notices.filter(notice => notice.guild_id === a).length, 5);
+  assert.equal(notices.filter(notice => notice.guild_id === b).length, 2);
+  assert.equal(notices.filter(notice => notice.guild_id === left).length, 0);
+  assert.deepEqual(notices.filter(notice => notice.guild_id === a).map(notice => notice.message_id), ['fair-6', 'fair-5', 'fair-4', 'fair-3', 'fair-2']);
+  await store.pool.query("DELETE FROM v2_reports WHERE guild_id IN ($1,$2,$3)", [a, b, left]);
+  await store.pool.query("DELETE FROM v2_guilds WHERE guild_id IN ($1,$2,$3)", [a, b, left]);
+});
+
+test('離脱サーバーのデータは保留期間後に消え、再参加では設定が戻る', async () => {
+  const g = 'leave-guild'; const c = 'leave-channel'; const message = 'leave-message';
+  await store.saveSettings(await store.settings(g, c), 'channel', { content: { text: false } }, actor);
+  await store.setPanel(g, c, 'leave-panel', 'leave-webhook');
+  assert.ok((await store.configuredPanels()).some(row => row.guildId === g));
+  assert.equal((await store.settings(g, c, true)).config.content.text, false);
+  await assert.equal(await store.markGuildLeft('unknown guild'), false);
+  assert.equal(await store.markGuildLeft(g), true);
+  assert.ok(!(await store.configuredPanels()).some(row => row.guildId === g));
+  await store.cleanup();
+  assert.equal((await store.settings(g, c, true)).config.content.text, false);
+  await store.pool.query("UPDATE v2_guilds SET left_at=now()-interval '31 days' WHERE guild_id=$1", [g]);
+  await store.cleanup();
+  assert.ok(!(await store.pool.query('SELECT 1 FROM v2_guilds WHERE guild_id=$1', [g])).rowCount);
+  assert.ok(!(await store.pool.query('SELECT 1 FROM v2_channels WHERE channel_id=$1', [c])).rowCount);
+  assert.ok(!(await store.pool.query('SELECT 1 FROM v2_posts WHERE guild_id=$1', [g])).rowCount);
+  assert.ok(!(await store.pool.query('SELECT 1 FROM v2_restrictions WHERE guild_id=$1', [g])).rowCount);
+  assert.ok(!(await store.pool.query('SELECT 1 FROM v2_revisions WHERE guild_id=$1', [g])).rowCount);
+  assert.ok(!(await store.pool.query('SELECT 1 FROM v2_actions WHERE guild_id=$1', [g])).rowCount);
+  assert.equal(await store.touchGuild(g), undefined);
+  assert.equal((await store.settings(g, c, true)).config.content.text, true);
+});
+

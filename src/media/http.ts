@@ -104,14 +104,38 @@ export class SafeHttp {
 
 export class WorkQueue {
   private active = 0;
-  private waiting: (() => void)[] = [];
-  constructor(private concurrency = 2, private maxWaiting = 10) {}
-  async run<T>(task: () => Promise<T>): Promise<T> {
-    if (this.active >= this.concurrency) {
-      if (this.waiting.length >= this.maxWaiting) throw new UserError('画像処理が混み合っています。少し待ってからお試しください。');
-      await new Promise<void>(resolve => this.waiting.push(resolve));
+  private lanes = new Map<string, (() => void)[]>();
+  private laneLimit: number;
+  constructor(private concurrency = 2, private maxWaiting = 10) {
+    this.laneLimit = Math.max(1, Math.ceil(maxWaiting / 3));
+  }
+  async run<T>(task: () => Promise<T>, key = ''): Promise<T> {
+    const lane = this.lanes.get(key);
+    if (this.active >= this.concurrency || lane?.length) {
+      const laneWaiting = lane?.length ?? 0;
+      const others = this.waiting() - laneWaiting;
+      if (this.waiting() >= this.maxWaiting || (laneWaiting >= this.laneLimit && others > 0))
+        throw new UserError('画像処理が混み合っています。少し待ってからお試しください。');
+      await new Promise<void>(resolve => lane?.length ? lane.push(resolve) : this.lanes.set(key, [resolve]));
     } else this.active++;
     try { return await task(); }
-    finally { const next = this.waiting.shift(); if (next) next(); else this.active--; }
+    finally { this.active--; this.pick(); }
+  }
+  private waiting(): number {
+    let total = 0;
+    for (const lane of this.lanes.values()) total += lane.length;
+    return total;
+  }
+  private pick(): void {
+    while (this.active < this.concurrency) {
+      let chosen: { key: string; resolve: () => void } | undefined;
+      for (const [key, lane] of this.lanes) if (lane.length) { chosen = { key, resolve: lane.shift()! }; break; }
+      if (!chosen) return;
+      const lane = this.lanes.get(chosen.key)!;
+      if (lane.length) { this.lanes.delete(chosen.key); this.lanes.set(chosen.key, lane); }
+      else this.lanes.delete(chosen.key);
+      this.active++;
+      chosen.resolve();
+    }
   }
 }

@@ -15,7 +15,7 @@ export async function loadEmojiAssets(): Promise<EmojiAsset[]> {
   })));
 }
 
-export async function syncApplicationEmojis(api: EmojiApi, assets?: EmojiAsset[]) {
+export async function syncApplicationEmojis(api: EmojiApi, assets?: EmojiAsset[], allowCreate = true) {
   const source = assets ?? await loadEmojiAssets();
   for (const asset of source) {
     const metadata = await sharp(asset.image).metadata();
@@ -31,6 +31,7 @@ export async function syncApplicationEmojis(api: EmojiApi, assets?: EmojiAsset[]
     let found = [definition.name, definition.legacyName].flatMap(name =>
       existing.filter(emoji => emoji.name === name).sort((a, b) => a.id.localeCompare(b.id)))[0];
     if (found) reused++;
+    else if (!allowCreate) { failed.push(key); continue; }
     else {
       if (existing.length >= 2000) { failed.push(key); continue; }
       try {

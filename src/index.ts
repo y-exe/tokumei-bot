@@ -1,84 +1,31 @@
 import './infra/environment.js';
-import sharp from './media/sharp.js';
-import { ActivityType, Client, Events, GatewayIntentBits, Options } from 'discord.js';
-import { App } from './app.js';
-import { Store } from './infra/store.js';
-import { SecretBox } from './infra/secrets.js';
-import { SafeHttp, WorkQueue } from './media/http.js';
-import { MediaService } from './media/service.js';
-import { initializeSafety } from './media/safety.js';
-import { initializeNudity } from './media/nudity.js';
-import { initializeAnimeNudity } from './media/anime-nudity.js';
-import { healthServer, heartbeat } from './infra/health.js';
-import { uiEmoji } from './ui/components.js';
-import { syncApplicationEmojis } from './ui/emoji-sync.js';
-import { guardChannel } from './services/channel-guard.js';
-import { lookupServer } from './infra/lookup.js';
-import { commandRegistrationApi, registerGlobalCommands } from './infra/command-registration.js';
-import { diagnosticDetails } from './infra/diagnostics.js';
-import { initializeBotAdmins, refreshBotAdmins } from './domain/permissions.js';
+import { fileURLToPath } from 'node:url';
+import { ShardingManager } from 'discord.js';
 
-const token = process.env.DISCORD_BOT_TOKEN ?? process.env.token;
-const database = process.env.DATABASE_URL;
-const key = process.env.ENCRYPTION_KEY;
-if (!token || (!database && !process.env.PGHOST) || !key) throw new Error('Botトークン・PostgreSQL接続設定・ENCRYPTION_KEYを指定してください。');
-const concurrency = Number(process.env.MEDIA_CONCURRENCY ?? 2);
-if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new Error('MEDIA_CONCURRENCYは1〜8を指定してください。');
-sharp.cache(false);
-sharp.concurrency(1);
-const secrets = new SecretBox(key);
-await initializeBotAdmins(process.env.BOT_ADMIN_ID_URL, async url => (await new SafeHttp().get(url,128,{'Cache-Control':'no-cache',Pragma:'no-cache'})).data.toString('utf8'));
-const store = new Store(database, secrets);
-await store.initialize();
-await initializeSafety();
-await initializeNudity();
-await initializeAnimeNudity();
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
-  presence: { activities: [{ name: '/setup | tokumei-bot by yexe', state: `${process.env.LOCAL_DEVELOPMENT === '1' ? '[テスト] ' : ''}/setup | tokumei-bot by yexe`, type: ActivityType.Custom }] },
-  makeCache: Options.cacheWithLimits({ ...Options.DefaultMakeCacheSettings, MessageManager: 0 }) });
-const app = new App(client, store, secrets, new MediaService(new SafeHttp(), new WorkQueue(concurrency)));
-const health = healthServer(client, store, Number(process.env.HEALTH_PORT ?? 3000), process.env.LOCAL_DEVELOPMENT === '1' ? '127.0.0.1' : '0.0.0.0');
-const lookup = process.env.LOOKUP_TAILSCALE_ORIGIN ? lookupServer(store,client,process.env.LOOKUP_TAILSCALE_ORIGIN,(process.env.LOOKUP_ALLOWED_TAILSCALE_LOGINS??'').split(',').map(login=>login.trim()).filter(Boolean),Number(process.env.LOOKUP_PORT??8765)) : undefined;
-client.on(Events.MessageCreate, message => {
-  void guardChannel(message, store, app.panels).catch(() => console.error('匿名チャンネルの通常投稿を確認できませんでした。'));
-});
-client.on(Events.InteractionCreate, interaction => {
-  void app.handle(interaction);
-});
-client.once(Events.ClientReady, async ready => {
-  try {
-    const result = await registerGlobalCommands(commandRegistrationApi(ready.rest, ready.application.id));
-    console.info(`コマンド同期: ${result.updated ? `${result.registered}個を更新` : '変更なし'} / 重複削除 ${result.removed}個`);
-  } catch (error) { console.error('コマンド自動同期に失敗しました。Botの起動を続けます。', diagnosticDetails(error)); }
-  try {
-    const result = await syncApplicationEmojis({
-      list: async () => [...(await ready.application.emojis.fetch()).values()],
-      create: (name, image) => ready.application.emojis.create({ name, attachment: image }),
-    });
-    Object.assign(uiEmoji, result.mappings);
-    console.info(`案内用絵文字: 追加 ${result.created} / 再利用 ${result.reused}`);
-    if (result.failed.length) console.error(`絵文字を追加できなかったため標準表示を使用します: ${result.failed.join('・')}`);
-  } catch { console.error('案内用絵文字の同期に失敗したため標準表示を使用します。'); }
-  await app.auditPanels().catch(() => console.error('起動時の案内確認に失敗しました。'));
-  await app.refreshReportNotices().catch(() => console.error('起動時の通報案内更新に失敗しました。'));
-  console.info(`匿名Bot v2 起動完了: ${ready.user.username}`);
-});
-await store.cleanup();
-const cleanup = setInterval(() => {
-  app.editors.sweep(); app.previews.sweep(); app.textRecoveries.sweep(); app.posting.sweep();
-  void refreshBotAdmins().catch(() => console.error('Bot運営者IDの更新に失敗しました。有効期限後は運営者権限を停止します。'));
-  void store.cleanup().catch(() => console.error('保存期限の削除処理に失敗しました。'));
-  void app.retryReportNotices().catch(() => console.error('未通知の通報を確認できませんでした。'));
-  void Promise.all([...new Set([process.env.WATCHER_PUSH_URL,process.env.WATCHER_IMAGE_PUSH_URL])]
-    .map(url=>heartbeat(url,client.isReady()))).catch(() => console.error('監視への応答に失敗しました。'));
-}, 60_000);
-cleanup.unref();
-let stopping: Promise<void> | undefined;
-export function shutdown(): Promise<void> {
-  return stopping ??= (async () => { clearInterval(cleanup); health.close(); lookup?.close(); client.destroy(); await store.close(); })();
-}
-if (process.env.LOCAL_DEVELOPMENT !== '1') {
-  process.once('SIGINT', () => { void shutdown(); });
-  process.once('SIGTERM', () => { void shutdown(); });
-}
-await client.login(token);
+const token = process.env.DISCORD_BOT_TOKEN;
+const shards = process.env.DISCORD_SHARDS;
+// 子プロセス(shard)と単一実行はbot.ts本体へ。DISCORD_SHARDSが指定された親プロセスだけがShardingManagerになる。
+if (shards && process.env.SHARDS === undefined) {
+  if (!token) throw new Error('Botトークンを指定してください。');
+  const totalShards = shards === 'auto' ? 'auto' : (() => {
+    const value = Number(shards);
+    if (!Number.isInteger(value) || value < 1 || value > 32) throw new Error('DISCORD_SHARDSは「auto」または1〜32の整数で指定してください。');
+    return value;
+  })();
+  const manager = new ShardingManager(fileURLToPath(import.meta.url), { token, respawn: true, totalShards });
+  manager.on('shardCreate', shard => {
+    console.info(`シャード${shard.id}を起動しました。`);
+    shard.on('death', () => console.error(`シャード${shard.id}が停止しました。再起動します。`));
+    shard.on('ready', () => console.info(`シャード${shard.id}は接続しました。`));
+    shard.on('disconnect', () => console.error(`シャード${shard.id}の接続が切れました。`));
+  });
+  const stopping = () => {
+    manager.respawn = false;
+    console.info('停止を受け付けました。シャードを終了します。');
+    for (const shard of manager.shards.values()) shard.kill();
+  };
+  process.once('SIGINT', stopping);
+  process.once('SIGTERM', stopping);
+  const spawned = await manager.spawn().catch(error => { console.error('シャードの起動に失敗しました。', error); process.exit(1); throw error; });
+  console.info(`ShardingManager起動完了: ${spawned.size}シャード`);
+} else await import('./bot.js');

@@ -50,7 +50,7 @@ export function initializeAnimeNudity(): Promise<{ session: ort.InferenceSession
   })();
 }
 
-export async function detectAnimeExposure(data: Buffer): Promise<BodyDetection[]> {
+export async function detectAnimeExposure(data: Buffer, key = ''): Promise<BodyDetection[]> {
   return queue.run(async () => {
     const start = performance.now(); const { session, labels, threshold } = await initializeAnimeNudity();
     const size = ANIME_INPUT_SIZE; const area = size * size;
@@ -64,7 +64,7 @@ export async function detectAnimeExposure(data: Buffer): Promise<BodyDetection[]
     const detections = parseDetections(output.data as Float32Array, output.dims[2], labels, threshold, 0.7);
     console.info(`[anime-nudity] blocked=${detections.length > 0} ms=${(performance.now() - start).toFixed(0)} rssMB=${(process.memoryUsage().rss / 1048576).toFixed(1)}`);
     return detections;
-  });
+  }, key);
 }
 
 export async function confirmAnimeExposure(
@@ -96,10 +96,10 @@ export async function confirmAnimeExposure(
   return false;
 }
 
-export async function hasAnimeExposure(data: Buffer): Promise<boolean> {
+export async function hasAnimeExposure(data: Buffer, key = ''): Promise<boolean> {
   const start = performance.now();
-  const detections = await detectAnimeExposure(data);
-  const blocked = await confirmAnimeExposure(data, detections);
+  const detections = await detectAnimeExposure(data, key);
+  const blocked = await confirmAnimeExposure(data, detections, (image) => detectAnimeExposure(image, key));
   console.info(`[anime-nudity] 最終判定=${blocked ? '拒否' : '許可'} 再確認=${detections.length > 0 && !detections.some(detection => detection.score >= ANIME_DIRECT_REJECTION_THRESHOLD)} ms=${(performance.now() - start).toFixed(0)} rssMB=${(process.memoryUsage().rss / 1048576).toFixed(1)}`);
   return blocked;
 }

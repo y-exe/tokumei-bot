@@ -30,21 +30,21 @@ export function enforceSafety(result: SafetyResult, config: Config): void {
     throw new MediaSafetyError(`このチャンネルでは${result.label === 'NSFW' ? '性的な画像・動画（NSFW）' : 'グロ・流血画像・動画（NSFL）'}を投稿できません。\n\n${result.label === 'NSFW' ? '性的な画像でない場合は管理者にお問い合わせください\nNSFW検知モデルの改善等致します' : 'グロ・流血画像でない場合は管理者にお問い合わせください\nNSFL検知モデルの改善等致します'}`);
 }
 
-export async function analyzeImageSafety(data: Buffer, config?: Config): Promise<ImageSafetyFacts> {
+export async function analyzeImageSafety(data: Buffer, config?: Config, key = ''): Promise<ImageSafetyFacts> {
   const checkedNsfw = !config?.content.allowNsfw;
   const checkedNsfl = !config?.content.allowNsfl;
   if (!checkedNsfw && !checkedNsfl) return { nsfw: false, nsfl: false, checkedNsfw, checkedNsfl };
   return frameQueue.run(async () => {
-    const nsfl = checkedNsfl && (await classifyImage(data)).label === 'NSFL';
-    const nsfw = checkedNsfw && (exposesRestrictedParts(await detectBodyParts(data)) || await hasAnimeExposure(data));
+    const nsfl = checkedNsfl && (await classifyImage(data, key)).label === 'NSFL';
+    const nsfw = checkedNsfw && (exposesRestrictedParts(await detectBodyParts(data, key)) || await hasAnimeExposure(data, key));
     return { nsfw, nsfl, checkedNsfw, checkedNsfl };
-  });
+  }, key);
 }
-async function checkFrame(data: Buffer, config: Config): Promise<void> {
-  enforceImageSafety(await analyzeImageSafety(data, config), config);
+async function checkFrame(data: Buffer, config: Config, key: string): Promise<void> {
+  enforceImageSafety(await analyzeImageSafety(data, config, key), config);
 }
 
-export async function checkMediaSafety(data: Buffer, config: Config, name = '', contentType = '', certificate?: ImageSafetyCertificate, original?: Buffer): Promise<void> {
+export async function checkMediaSafety(data: Buffer, config: Config, name = '', contentType = '', certificate?: ImageSafetyCertificate, original?: Buffer, key = ''): Promise<void> {
   if (config.content.allowNsfw && config.content.allowNsfl) return;
   return queue.run(async () => {
     const matchesOutput = !!certificate && certificate.sha256 === createHash('sha256').update(data).digest('hex');
@@ -67,7 +67,7 @@ export async function checkMediaSafety(data: Buffer, config: Config, name = '', 
       return;
     }
     try {
-      if (metadata && (metadata.pages ?? 1) === 1) { await checkFrame(data, config); return; }
+      if (metadata && (metadata.pages ?? 1) === 1) { await checkFrame(data, config, key); return; }
       const started = performance.now();
       if (metadata) {
         const delay = (page: number) => Math.max(metadata!.delay?.[page] ?? 100, 10);
@@ -79,7 +79,7 @@ export async function checkMediaSafety(data: Buffer, config: Config, name = '', 
           const end = elapsed + delay(page);
           if (times[target]! * 1000 < end) {
             const frame = await sharp(data, { page, pages: 1, limitInputPixels: 40_000_000 }).resize(ANIME_INPUT_SIZE, ANIME_INPUT_SIZE, { fit: 'inside', withoutEnlargement: true, kernel: 'cubic' }).png().toBuffer();
-            await checkFrame(frame, config);
+            await checkFrame(frame, config, key);
             frames++;
             while (target < times.length && times[target]! * 1000 < end) target++;
           }
@@ -96,7 +96,7 @@ export async function checkMediaSafety(data: Buffer, config: Config, name = '', 
         const times = videoSampleTimes(duration);
         for (const seconds of times) {
           const frame = await extractVideoFrame(path, seconds, ANIME_INPUT_SIZE);
-          await checkFrame(frame, config);
+          await checkFrame(frame, config, key);
         }
         console.info('[safety] 動画判定完了', { seconds: duration, frames: times.length, ms: Math.round(performance.now() - started) });
       } finally { await rm(directory, { recursive: true, force: true }); }
@@ -106,5 +106,5 @@ export async function checkMediaSafety(data: Buffer, config: Config, name = '', 
         { stage: error.stage, reason: error.reason, exitCode: error.exitCode, signal: error.signal } : { reason: 'inference_failed' });
       throw new UserError('画像・動画の安全判定に失敗したため投稿できません。ファイルを再取得してお試しください。繰り返す場合は管理者にお問い合わせください。');
     }
-  });
+  }, key);
 }

@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS v2_diagnostics (
 CREATE TABLE IF NOT EXISTS v2_guilds (
   guild_id text PRIMARY KEY, config jsonb NOT NULL, version integer NOT NULL DEFAULT 0
 );
+ALTER TABLE v2_guilds ADD COLUMN IF NOT EXISTS left_at timestamptz;
 CREATE TABLE IF NOT EXISTS v2_channels (
   guild_id text NOT NULL REFERENCES v2_guilds(guild_id), channel_id text PRIMARY KEY,
   overrides jsonb NOT NULL DEFAULT '{}', version integer NOT NULL DEFAULT 0,
@@ -116,13 +117,25 @@ ALTER TABLE v2_actions ADD COLUMN IF NOT EXISTS reason text;
 CREATE INDEX IF NOT EXISTS v2_posts_anonymous_reference ON v2_posts(guild_id,channel_id,anonymous_id,created_at DESC) WHERE status='sent';
 CREATE INDEX IF NOT EXISTS v2_reports_pending ON v2_reports(notification_retry_at) WHERE status='open';`;
 
+function readPoolMax(): number {
+  const value = Number(process.env.DB_POOL_MAX || 5);
+  if (!Number.isInteger(value) || value < 1 || value > 30) throw new Error('DB_POOL_MAXは1〜30の整数で指定してください。');
+  return value;
+}
+function readGraceDays(): number {
+  const value = Number(process.env.GUILD_DELETE_GRACE_DAYS || 30);
+  if (!Number.isInteger(value) || value < 1 || value > 365) throw new Error('GUILD_DELETE_GRACE_DAYSは1〜365の整数で指定してください。');
+  return value;
+}
+
 export class Store {
   readonly pool: Pool;
   private identities?: IdentityPrivacy;
   private cache = new Map<string, { settings: ChannelSettings; expires: number }>();
+  private guildGraceDays = readGraceDays();
   constructor(databaseUrl?: string, box?: SecretBox) {
     if (!box && process.env.NODE_ENV === 'production') throw new Error('本番DBの利用にはID保護用の暗号鍵が必要です。');
-    this.pool = new Pool({ connectionString: databaseUrl, max: 5, connectionTimeoutMillis: 5000 });
+    this.pool = new Pool({ connectionString: databaseUrl, max: readPoolMax(), connectionTimeoutMillis: 5000 });
     if (box) this.identities = new IdentityPrivacy(box);
   }
   identityKey(guildId: string, userId: string): string { return this.identities?.key(guildId, userId) ?? userId; }
@@ -281,8 +294,35 @@ export class Store {
     return row ? resolveConfig(configSchema.parse(row.config),overridesSchema.parse(row.overrides)) : null;
   }
   async configuredPanels(): Promise<{ guildId: string; channelId: string; panelId: string }[]> {
-    return (await this.pool.query('SELECT guild_id, channel_id, panel_id FROM v2_channels WHERE enabled=true AND panel_id IS NOT NULL'))
+    return (await this.pool.query(`SELECT c.guild_id,c.channel_id,c.panel_id FROM v2_channels c
+      JOIN v2_guilds g ON g.guild_id=c.guild_id WHERE c.enabled=true AND c.panel_id IS NOT NULL AND g.left_at IS NULL`))
       .rows.map(row => ({ guildId: row.guild_id, channelId: row.channel_id, panelId: row.panel_id }));
+  }
+  async touchGuild(guildId: string): Promise<void> {
+    await this.pool.query('INSERT INTO v2_guilds(guild_id,config) VALUES($1,$2) ON CONFLICT(guild_id) DO UPDATE SET left_at=NULL', [guildId, defaults]);
+  }
+  async markGuildLeft(guildId: string): Promise<boolean> {
+    return !!(await this.pool.query('UPDATE v2_guilds SET left_at=now() WHERE guild_id=$1 AND left_at IS NULL', [guildId])).rowCount;
+  }
+  private async deleteExpiredGuilds(client: PoolClient): Promise<string[]> {
+    const guildIds = (await client.query(`SELECT guild_id FROM v2_guilds WHERE left_at IS NOT NULL AND left_at<=now()-$1::integer*interval '1 day' FOR UPDATE`,
+      [this.guildGraceDays])).rows.map(row => row.guild_id as string);
+    if (!guildIds.length) return [];
+    await client.query('DELETE FROM v2_posts WHERE guild_id=ANY($1)', [guildIds]);
+    await client.query('DELETE FROM v2_reports WHERE guild_id=ANY($1)', [guildIds]);
+    await client.query('DELETE FROM v2_sessions WHERE guild_id=ANY($1)', [guildIds]);
+    await client.query('DELETE FROM v2_restrictions WHERE guild_id=ANY($1)', [guildIds]);
+    await client.query('DELETE FROM v2_channel_restrictions WHERE guild_id=ANY($1)', [guildIds]);
+    await client.query('DELETE FROM v2_actions WHERE guild_id=ANY($1)', [guildIds]);
+    await client.query('DELETE FROM v2_revisions WHERE guild_id=ANY($1)', [guildIds]);
+    await client.query(`DELETE FROM v2_diagnostics WHERE guild_id=ANY($1)
+      OR channel_id IN (SELECT channel_id FROM v2_channels WHERE guild_id=ANY($1))`, [guildIds]);
+    await client.query('DELETE FROM v2_legacy_lookup_blocks WHERE channel_id IN (SELECT channel_id FROM v2_channels WHERE guild_id=ANY($1))', [guildIds]);
+    await client.query('DELETE FROM v2_counters WHERE channel_id IN (SELECT channel_id FROM v2_channels WHERE guild_id=ANY($1))', [guildIds]);
+    await client.query('DELETE FROM v2_channels WHERE guild_id=ANY($1)', [guildIds]);
+    await client.query('DELETE FROM v2_guilds WHERE guild_id=ANY($1)', [guildIds]);
+    for (const guildId of guildIds) this.invalidate(guildId);
+    return guildIds;
   }
   async claimReportNotification(guildId: string, messageId: string): Promise<string | null> {
     return this.transaction(async client => {
@@ -311,13 +351,20 @@ export class Store {
       GROUP BY guild_id,channel_id,message_id
       HAVING bool_and(notification_id IS NULL OR notification_id LIKE 'pending%')
         AND bool_and(notification_retry_at IS NULL OR notification_retry_at<=now())
-      ) SELECT n.guild_id,n.channel_id,n.message_id,n.count,n.content,n.reason,n.nonce
-      FROM notices n JOIN v2_guilds g ON g.guild_id=n.guild_id
+      ), qualified AS (
+      SELECT n.guild_id,n.channel_id,n.message_id,n.count,n.content,n.reason,n.nonce,n.oldest
+      FROM notices n JOIN v2_guilds g ON g.guild_id=n.guild_id AND g.left_at IS NULL
       LEFT JOIN v2_channels c ON c.guild_id=n.guild_id AND c.channel_id=n.channel_id
       WHERE n.count >= COALESCE(c.overrides#>>'{moderation,reportThreshold}',g.config#>>'{moderation,reportThreshold}')::integer
         AND CASE WHEN c.overrides->'moderation' ? 'reportChannel'
           THEN c.overrides#>>'{moderation,reportChannel}' ELSE g.config#>>'{moderation,reportChannel}' END IS NOT NULL
-      ORDER BY n.oldest LIMIT 20`, [guildId, messageId])).rows;
+      ), ranked AS (
+      SELECT guild_id,channel_id,message_id,count,content,reason,nonce,oldest,
+        ROW_NUMBER() OVER (PARTITION BY guild_id ORDER BY oldest,message_id) AS position
+      FROM qualified
+      ) SELECT guild_id,channel_id,message_id,count,content,reason,nonce
+      FROM ranked WHERE position<=5
+      ORDER BY oldest LIMIT 20`, [guildId, messageId])).rows;
   }
   async reserve(input: { operationId: string; guildId: string; channelId: string; userId: string; text: string; source?: string; replyTo?: string; videoLinks?: string[] }, config: Config, deliveryWebhook?: string): Promise<StoredPost> {
     if(config.policy.retentionDays===0)throw new UserError('保存しない設定では投稿ログを作成できません。');
@@ -545,6 +592,7 @@ export class Store {
   async cleanup(): Promise<void> {
     await this.transaction(async client => {
       await this.blockUnloggedLegacy(client);
+      await this.deleteExpiredGuilds(client);
       await client.query('DELETE FROM v2_flood_control WHERE expires_at<=now()');
       await client.query('DELETE FROM v2_reports WHERE expires_at<=now()');
       await client.query(`DELETE FROM v2_diagnostics d USING v2_channels c,v2_guilds g

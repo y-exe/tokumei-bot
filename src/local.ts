@@ -13,10 +13,14 @@ const statePath = join(dir, 'run.json');
 const lockPath = join(dir, 'run.lock');
 type State = { pid: number; port: number; secret: string; applicationId: string; databasePort: number };
 
+const fallbackProductionApplicationId = '1400799112529449000';
+
 export function localCredentials(settings: Record<string, string>): { token: string; applicationId: string } {
   const token = settings.DISCORD_BOT_TOKEN; const applicationId = settings.DISCORD_APPLICATION_ID;
   if (!token || !/^\d{17,20}$/.test(applicationId ?? '')) throw new Error('.env.localにテストBotのトークンとアプリケーションIDを設定してください。');
-  if (applicationId === '1400799112529449000') throw new Error('本番BotのIDではローカル環境を起動できません。');
+  const production = settings.PRODUCTION_APPLICATION_ID?.trim() || fallbackProductionApplicationId;
+  if (!/^\d{17,20}$/.test(production)) throw new Error('PRODUCTION_APPLICATION_IDには本番BotのアプリケーションID(17〜20桁の数字)を設定してください。');
+  if (applicationId === production) throw new Error('本番BotのIDではローカル環境を起動できません。');
   return { token, applicationId: applicationId! };
 }
 
@@ -90,7 +94,7 @@ async function main(): Promise<void> {
     db = await PGlite.create(join(dir, 'pglite'));
     socket = new PGLiteSocketServer({ db, port: 0, host: '127.0.0.1', maxConnections: 5 }); await socket.start();
     process.env.DATABASE_URL = `postgresql://postgres:postgres@${socket.getServerConn()}/postgres`;
-    app = await import('./index.js');
+    app = await import('./bot.js') as { shutdown(): Promise<void> };
     await new Promise<void>((done, reject) => { control.once('error', reject); control.listen(0, '127.0.0.1', done); });
     const address = control.address(); if (!address || typeof address === 'string') throw new Error('停止用ポートを開けませんでした。');
     const databasePort = Number(new URL(process.env.DATABASE_URL).port);

@@ -114,7 +114,7 @@ export function exposesRestrictedParts(detections: BodyDetection[]): boolean {
   return detections.some(detection => restricted.has(detection.label) && detection.score >= NUDITY_THRESHOLD);
 }
 
-export async function detectBodyParts(data: Buffer): Promise<BodyDetection[]> {
+export async function detectBodyParts(data: Buffer, key = ''): Promise<BodyDetection[]> {
   return queue.run(async () => {
     const start = performance.now(); const { session, labels } = await initializeNudity();
     const image = sharp(data, { pages: 1, limitInputPixels: 40_000_000, failOn: 'warning' }).toColourspace('srgb').flatten({ background: 'white' }).removeAlpha();
@@ -132,5 +132,5 @@ export async function detectBodyParts(data: Buffer): Promise<BodyDetection[]> {
     const detections = parseDetections(result.data as Float32Array, result.dims[2]!, labels);
     console.info(`[nudity] blocked=${exposesRestrictedParts(detections)} ms=${(performance.now() - start).toFixed(0)} rssMB=${(process.memoryUsage().rss / 1048576).toFixed(1)}`);
     return detections;
-  });
+  }, key);
 }

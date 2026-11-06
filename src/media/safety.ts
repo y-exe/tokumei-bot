@@ -46,7 +46,7 @@ export async function prepareSafetyModels(): Promise<void> {
   await download('model.onnx', 'onnx/image-safety-classifier-xs.onnx');
 }
 
-export async function classifyImage(input: Buffer | string): Promise<SafetyResult> {
+export async function classifyImage(input: Buffer | string, key = ''): Promise<SafetyResult> {
   return queue.run(async () => {
     const start = performance.now();
     const { session, labels } = await initializeSafety();
@@ -63,5 +63,5 @@ export async function classifyImage(input: Buffer | string): Promise<SafetyResul
     const label = labels[probabilities.indexOf(Math.max(...probabilities))]!;
     console.info(`[safety] label=${label} ms=${(performance.now() - start).toFixed(0)} rssMB=${(process.memoryUsage().rss / 1048576).toFixed(1)}`);
     return { ...values, label };
-  });
+  }, key);
 }

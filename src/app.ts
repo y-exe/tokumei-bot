@@ -198,7 +198,7 @@ export class App {
         if (!attachment) throw new UserError('投稿するファイルを添付してください。');
         await this.posting.preflight({ guildId: interaction.guildId!, channelId: interaction.channelId!, userId: interaction.user.id, operationId: interaction.id,
           text: interaction.options.getString('text') ?? interaction.options.getString('content') ?? '' }, settings.config);
-        const files = await this.media.attachments([attachment.url], settings.config);
+        const files = await this.media.attachments([attachment.url], settings.config, interaction.guildId!);
         await this.send(interaction, interaction.options.getString('text') ?? interaction.options.getString('content') ?? '', files); return;
       }
       case 'panel': {
@@ -218,8 +218,9 @@ export class App {
       }
     }
   }
-  async auditPanels(): Promise<void> {
+  async auditPanels(filter?: (guildId: string) => boolean): Promise<void> {
     for (const { guildId, channelId } of await this.store.configuredPanels()) {
+      if (filter && !filter(guildId)) continue;
       await this.panels.restore(guildId, channelId).catch(() => console.error(`起動時の案内確認に失敗しました(チャンネル:${channelId})`));
     }
   }
@@ -252,7 +253,7 @@ export class App {
       validateText(url, settings.config, 1800, 'source'); validateText(content, settings.config);
       if (!settings.config.content.caption && content.trim()) throw new UserError('このチャンネルでは画像に説明文を付けられません。');
       await this.posting.preflight({ guildId: interaction.guildId!, channelId: interaction.channelId!, userId: interaction.user.id, operationId: interaction.id, text: content }, settings.config);
-      const result = await this.media.fromUrl(url, settings.config);
+      const result = await this.media.fromUrl(url, settings.config, interaction.guildId!);
       const session: PreviewSession = { owner: interaction.user.id, guildId: interaction.guildId!, channelId: interaction.channelId!,
         files: result.files, source: result.source, text: content, warnings: result.warnings, selected: result.files.map((_, index) => index), sending: false, videoLinks: result.videoLinks, replyTo };
       const id = this.previews.create(session, result.files.reduce((sum, file) => sum + mediaBytes(file), 0));
@@ -633,7 +634,7 @@ export class App {
       if (kind === 'url') { await this.prepareUrl(interaction, field('url'), content, prefix === 'replyurl' ? id : undefined); return; }
       if (kind === 'image' && !settings.config.content.images) throw new UserError('このチャンネルではファイルの直接添付を利用できません。');
       await this.posting.preflight({ guildId: interaction.guildId!, channelId: interaction.channelId!, userId: interaction.user.id, operationId: interaction.id, text: content }, settings.config);
-      const files = kind === 'image' ? await this.media.attachments([...interaction.fields.getUploadedFiles('files', true).values()].map(file => file.url), settings.config) : [];
+      const files = kind === 'image' ? await this.media.attachments([...interaction.fields.getUploadedFiles('files', true).values()].map(file => file.url), settings.config, interaction.guildId!) : [];
       await this.send(interaction, content, files, undefined, prefix === 'reply' || prefix === 'replyimage' ? id : undefined); return;
     }
     if (prefix === 'selfedit' && id) { await interaction.deferReply({ flags: MessageFlags.Ephemeral }); await this.editPost(interaction, id, field('text')); return; }

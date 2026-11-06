@@ -16,8 +16,8 @@
 
 | ページ | 内容 |
 | --- | --- |
-| [セットアップ](operations/setup.md) | 必要環境、Discordの準備、環境変数、初回起動 |
-| [運用・エラー調査](operations/maintenance.md) | Docker、監視、バックアップ、エラーID |
+| [セットアップ](operations/setup.md) | 必要環境、Discordの準備、環境変数、初回起動、複数サーバーとsharding運用 |
+| [運用・エラー調査](operations/maintenance.md) | Docker、監視、バックアップ、エラーID、離脱サーバーのデータ削除 |
 | [lookup](operations/lookup.md) | Tailscale内での投稿者照会、自動認証、接続確認 |
 
 ## 開発 — `development/`

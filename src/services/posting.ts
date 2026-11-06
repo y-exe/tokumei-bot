@@ -48,10 +48,10 @@ export class Posting {
     input = { ...input, text: cleanSharedUrls(input.text,settings.config.policy.cleanUrls !== false), source: input.source ? cleanSharedUrls(input.source,settings.config.policy.cleanUrls !== false) : input.source };
     validatePost(input, settings.config);
     await this.preflight(input, settings.config);
-    for (const file of input.media) await checkMediaSafety(file.data, settings.config, file.name, '', file.safety, file.safetyInput);
+    for (const file of input.media) await checkMediaSafety(file.data, settings.config, file.name, '', file.safety, file.safetyInput, input.guildId);
     for (const url of settings.config.content.allowNsfw && settings.config.content.allowNsfl ? [] : input.videoLinks ?? []) {
       const response = await new SafeHttp().get(videoSourceUrl(url), MAX_DOWNLOAD_BYTES);
-      await checkMediaSafety(response.data, settings.config, 'video.mp4', 'video/mp4');
+      await checkMediaSafety(response.data, settings.config, 'video.mp4', 'video/mp4', undefined, undefined, input.guildId);
     }
     const reply=input.replyTo?await this.store.post(input.guildId,input.channelId,input.replyTo):null;
     if (input.replyTo && !reply) throw new UserError('返信先が削除済みか保存期限を過ぎています。');

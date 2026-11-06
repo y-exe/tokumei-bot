@@ -31,7 +31,7 @@ export function galleryMedia(value: unknown, config: Config): MediaSource[] {
 
 export class GalleryDl {
   constructor(readonly python=process.env.NODE_ENV==='test'?undefined:process.env.GALLERY_DL_PYTHON) {}
-  async resolve(url: string, config: Config): Promise<MediaSource[]> {
+  async resolve(url: string, config: Config, key = ''): Promise<MediaSource[]> {
     if(!this.python)return [];
     validateText(url,config,4000,'source');
     return queue.run(async()=>{
@@ -47,6 +47,6 @@ export class GalleryDl {
       let value: unknown;
       try{value=JSON.parse(result);}catch{return [];}
       return galleryMedia(value,config);
-    });
+    },key);
   }
 }

@@ -9,6 +9,9 @@ test('ローカル起動は本番Bot・ID未設定を拒否する', () => {
   assert.throws(() => localCredentials({ DISCORD_BOT_TOKEN: 'test-only-token' }), /設定/);
   assert.throws(() => localCredentials({ ...settings, DISCORD_BOT_TOKEN: '' }), /設定/);
   assert.deepEqual(localCredentials(settings), { token: settings.DISCORD_BOT_TOKEN, applicationId: settings.DISCORD_APPLICATION_ID });
+  assert.throws(() => localCredentials({ ...settings, PRODUCTION_APPLICATION_ID: '1566798409627861072' }), /本番Bot/);
+  assert.throws(() => localCredentials({ ...settings, PRODUCTION_APPLICATION_ID: 'production-id' }), /アプリケーションID/);
+  assert.doesNotThrow(() => localCredentials({ ...settings, PRODUCTION_APPLICATION_ID: '9999999999999999999' }));
 });
 
 test('本番のDB・トークン・鍵・監視・lookup・Cookieはローカル環境へ引き継がない', () => {
